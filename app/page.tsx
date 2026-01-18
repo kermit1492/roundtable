@@ -4,9 +4,11 @@ import { useState, useEffect, useRef } from 'react';
 import { generatePDF, downloadPDF, type ReportData, type ModelResponse } from './components/PDFReport';
 
 const AVAILABLE_MODELS = [
+  // Flagship tier
   { id: 'openai/gpt-5.2-pro', name: 'GPT-5.2 Pro', color: '#10b981', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
   { id: 'anthropic/claude-opus-4.5', name: 'Claude Opus 4.5', color: '#f59e0b', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
   { id: 'google/gemini-3-pro-preview', name: 'Gemini 3 Pro', color: '#4285f4', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
+  // Fast tier
   { id: 'openai/gpt-5.2', name: 'GPT-5.2', color: '#059669', tier: 'fast', supportsFiles: true, fileTypes: ['image', 'pdf'] },
   { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', color: '#34a853', tier: 'fast', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
   { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', color: '#d97706', tier: 'fast', supportsFiles: true, fileTypes: ['image', 'pdf'] },
@@ -23,7 +25,7 @@ const PRESETS = {
     name: 'Speed Round',
     description: 'Fast models for brainstorming',
     icon: '⚡',
-    models: ['google/gemini-3-flash-preview', 'x-ai/grok-4.1-fast', 'anthropic/claude-sonnet-4.5', 'openai/gpt-5.2'],
+    models: ['openai/gpt-5.2', 'google/gemini-3-flash-preview', 'anthropic/claude-sonnet-4.5'],
   },
 };
 
@@ -43,6 +45,7 @@ interface VoteState {
   status: 'pending' | 'voting' | 'retrying' | 'voted' | 'failed';
   vote?: 'yes' | 'no';
   score?: number;
+  reasoning?: string;
   retryAttempt?: number;
 }
 
@@ -510,12 +513,13 @@ export default function Home() {
       case 'model_voted':
         setDiscussion(p => {
           const id = data.model as string;
-          const vote = data.vote as { consensusReached: boolean; similarityScore: number };
+          const vote = data.vote as { consensusReached: boolean; similarityScore: number; reasoning: string };
           const vs = { ...p.votingStates };
-          vs[id] = { 
-            status: 'voted', 
+          vs[id] = {
+            status: 'voted',
             vote: vote.consensusReached ? 'yes' : 'no',
-            score: vote.similarityScore 
+            score: vote.similarityScore,
+            reasoning: vote.reasoning,
           };
           return { ...p, votingStates: vs };
         });
@@ -790,12 +794,23 @@ export default function Home() {
         >
           <textarea
             value={question}
-            onChange={e => setQuestion(e.target.value)}
+            onChange={e => {
+              setQuestion(e.target.value);
+              // Auto-resize textarea
+              e.target.style.height = 'auto';
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 300)}px`;
+            }}
             placeholder={thread.length > 0 ? 'Ask a follow-up...' : 'What would you like to discuss?'}
-            className="w-full bg-transparent text-lg focus:outline-none resize-none"
-            style={{ color: 'var(--text-primary)' }}
-            rows={2}
+            className="w-full bg-transparent text-lg focus:outline-none resize-none overflow-hidden"
+            style={{ color: 'var(--text-primary)', minHeight: '56px', maxHeight: '300px' }}
+            rows={1}
             disabled={discussion.status === 'running'}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey && question.trim() && selectedModels.length >= 2) {
+                e.preventDefault();
+                startDiscussion(thread.length > 0);
+              }
+            }}
           />
 
           {file && (
@@ -966,21 +981,21 @@ export default function Home() {
               />
             </div>
             
-            {/* Voting Status Panel */}
-            {discussion.phase === 'voting' && Object.keys(discussion.votingStates).length > 0 && (
+            {/* Voting Status Panel - show during voting and analyzing phases */}
+            {(discussion.phase === 'voting' || discussion.phase === 'analyzing') && Object.keys(discussion.votingStates).length > 0 && (
               <div className="mt-4 pt-4 border-t" style={{ borderColor: 'var(--border-secondary)' }}>
                 <div className="text-xs font-medium mb-3" style={{ color: 'var(--text-tertiary)' }}>🗳️ Voting Progress</div>
-                <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Object.keys(discussion.votingStates).length}, 1fr)` }}>
+                <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(Object.keys(discussion.votingStates).length, 3)}, 1fr)` }}>
                   {Object.entries(discussion.votingStates).map(([modelId, voteState]) => {
                     const model = getModel(modelId);
                     if (!model) return null;
-                    
+
                     return (
                       <div
                         key={modelId}
                         className="rounded-lg p-3 border transition-all"
                         style={{
-                          backgroundColor: voteState.status === 'voted' 
+                          backgroundColor: voteState.status === 'voted'
                             ? voteState.vote === 'yes' ? 'var(--success-bg)' : 'var(--bg-tertiary)'
                             : voteState.status === 'failed' ? '#fef2f2'
                             : 'var(--bg-tertiary)',
@@ -991,7 +1006,7 @@ export default function Home() {
                             : 'var(--border-secondary)',
                         }}
                       >
-                        <div className="flex items-center gap-2 mb-1">
+                        <div className="flex items-center gap-2 mb-2">
                           <div className="w-2 h-2 rounded-full" style={{ backgroundColor: model.color }} />
                           <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
                             {model.name}
@@ -1017,6 +1032,15 @@ export default function Home() {
                             <span className="text-red-500">⚠️ Failed</span>
                           )}
                         </div>
+                        {/* Show reasoning when voted */}
+                        {voteState.status === 'voted' && voteState.reasoning && (
+                          <div
+                            className="mt-2 pt-2 border-t text-xs leading-relaxed max-h-32 overflow-y-auto"
+                            style={{ borderColor: 'var(--border-secondary)', color: 'var(--text-tertiary)' }}
+                          >
+                            {voteState.reasoning}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1128,17 +1152,17 @@ export default function Home() {
                 </div>
                 <div>
                   <h3 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
-                    {discussion.consensusResult.consensus_type === 'full' 
-                      ? '✅ Full Consensus' 
+                    {discussion.consensusResult.consensus_type === 'full'
+                      ? '✅ Full Consensus'
                       : discussion.consensusResult.consensus_type === 'partial'
                         ? '⚡ Partial Consensus'
                         : '❌ No Consensus'}
                   </h3>
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    {discussion.consensusResult.votes 
-                      ? `${discussion.consensusResult.votes.yes}/${discussion.consensusResult.votes.total} models agree`
-                      : `${Math.round(discussion.consensusResult.similarity_score * 100)}% agreement`
-                    } • {discussion.iteration} round{discussion.iteration > 1 ? 's' : ''}
+                    {discussion.consensusResult.votes
+                      ? `${discussion.consensusResult.votes.yes}/${discussion.consensusResult.votes.total} models voted YES`
+                      : 'No vote data'
+                    } • Avg confidence: {Math.round(discussion.consensusResult.similarity_score * 100)}% • {discussion.iteration} round{discussion.iteration > 1 ? 's' : ''}
                   </p>
                 </div>
               </div>

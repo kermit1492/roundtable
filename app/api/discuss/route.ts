@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const MAX_ITERATIONS = 5;
-const PARTIAL_CONSENSUS_THRESHOLD = 0.67; // 2/3 models agree
+const PARTIAL_CONSENSUS_THRESHOLD = 0.66; // 2/3 models agree (0.666...)
 const MAX_VOTE_RETRIES = 5; // Each model MUST vote
 
 interface FileAttachment {
@@ -41,9 +41,11 @@ interface VoteResult {
 }
 
 const MODEL_NAMES: Record<string, string> = {
+  // Flagship
   'openai/gpt-5.2-pro': 'GPT-5.2 Pro',
   'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
   'google/gemini-3-pro-preview': 'Gemini 3 Pro',
+  // Fast
   'openai/gpt-5.2': 'GPT-5.2',
   'google/gemini-3-flash-preview': 'Gemini 3 Flash',
   'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
@@ -365,24 +367,35 @@ const SYSTEM_PROMPT = `You are an expert participating in a roundtable discussio
 Your goal is to provide thoughtful, well-reasoned responses and engage constructively with other perspectives.
 Be concise but thorough. Respond in the same language as the question.`;
 
-const VOTE_PROMPT = `You have just participated in a discussion. Here are ALL the responses:
+const VOTE_PROMPT = `You are {model_name}, and you just participated in a roundtable discussion.
 
-{responses}
+CRITICAL: You MUST write ALL text fields (reasoning, synthesis, key_agreements, key_disagreements) in the SAME LANGUAGE as the original question. If the question was in Russian, respond in Russian. If in English, respond in English.
 
-Now evaluate: Has consensus been reached among the participants?
+Here is YOUR response:
+{my_response}
+
+Here are the OTHER participants' responses:
+{other_responses}
+
+Now evaluate from YOUR perspective: Do you agree with the other participants? Has consensus been reached?
+
+Consider:
+- Do the other models' conclusions align with yours?
+- Are there points where you disagree with specific participants?
+- Would you change your position based on their arguments?
 
 You must respond with ONLY valid JSON in this exact format:
 {
   "consensus_reached": true/false,
   "similarity_score": 0.0-1.0,
-  "reasoning": "brief explanation of your assessment",
-  "synthesis": "if consensus reached, write a unified conclusion that captures the shared view (3-5 sentences)",
-  "key_agreements": ["point 1", "point 2", ...],
-  "key_disagreements": ["point 1", ...]
+  "reasoning": "I believe... / In my view... (explain your assessment from first-person perspective)",
+  "synthesis": "if consensus reached, write a unified conclusion that captures our shared view (3-5 sentences)",
+  "key_agreements": ["I agree with X that...", "We all concluded that...", ...],
+  "key_disagreements": ["I disagree with X on...", "Unlike Y, I think...", ...]
 }
 
-Be honest in your assessment. Consensus means substantial agreement on the main points, not perfect agreement on every detail.
-Respond in the same language as the original question.`;
+Be honest. If you find another model's argument compelling, acknowledge it. If you disagree, explain why.
+IMPORTANT: All text in the JSON fields MUST be in the same language as the original question!`;
 
 const ANALYZE_POINTS_PROMPT = `You are analyzing the key points from a multi-model AI discussion.
 
@@ -597,10 +610,25 @@ export async function POST(request: NextRequest) {
         // Helper function to get a single vote with retries
         const getVoteWithRetry = async (modelId: string): Promise<VoteResult> => {
           const modelName = getModelName(modelId);
-          
+
+          // Get this model's own response
+          const myResponse = allResponses[iteration][modelId] || '';
+
+          // Get other models' responses (excluding this model)
+          const otherResponsesText = Object.entries(allResponses[iteration])
+            .filter(([id]) => id !== modelId)
+            .map(([id, resp]) => `${getModelName(id)}:\n${resp}`)
+            .join('\n\n---\n\n');
+
+          // Build personalized vote prompt
+          const personalizedPrompt = VOTE_PROMPT
+            .replace('{model_name}', modelName)
+            .replace('{my_response}', myResponse)
+            .replace('{other_responses}', `Question: ${question}\n\n${otherResponsesText}`);
+
           const voteMessages = [
-            { role: 'system', content: 'You are evaluating a discussion for consensus. Return ONLY valid JSON.' },
-            { role: 'user', content: VOTE_PROMPT.replace('{responses}', `Question: ${question}\n\n${allResponsesText}`) },
+            { role: 'system', content: `You are ${modelName}, evaluating a discussion you participated in. Return ONLY valid JSON. Write all text in the same language as the original question.` },
+            { role: 'user', content: personalizedPrompt },
           ];
 
           for (let attempt = 1; attempt <= MAX_VOTE_RETRIES; attempt++) {
@@ -615,13 +643,21 @@ export async function POST(request: NextRequest) {
                 await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
               }
               
-              const voteResponse = await callModel(modelId, voteMessages, 2000, 0.3, 2); // Increased to 2000 tokens for voting
-              
+              const voteResponse = await callModel(modelId, voteMessages, 4000, 0.3, 2); // Increased to 4000 tokens for voting
+
               console.log(`[${modelName}] Vote response length: ${voteResponse.length}`);
               console.log(`[${modelName}] Vote response preview: ${voteResponse.slice(0, 200)}...`);
-              
-              // Parse JSON from response
-              const jsonMatch = voteResponse.match(/\{[\s\S]*\}/);
+
+              // Parse JSON from response - handle markdown code blocks
+              let jsonText = voteResponse;
+              // Remove markdown code block wrapper if present (```json ... ```)
+              const codeBlockMatch = voteResponse.match(/```(?:json)?\s*([\s\S]*?)```/);
+              if (codeBlockMatch) {
+                jsonText = codeBlockMatch[1].trim();
+                console.log(`[${modelName}] Extracted JSON from markdown code block`);
+              }
+
+              const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
               if (jsonMatch) {
                 console.log(`[${modelName}] JSON found, parsing...`);
                 // Use robust sanitization
@@ -707,33 +743,50 @@ export async function POST(request: NextRequest) {
         const totalVotes = votes.length;
         const consensusRatio = yesVotes / totalVotes;
         const avgScore = votes.reduce((sum, v) => sum + v.similarityScore, 0) / totalVotes;
+        const minScore = Math.min(...votes.map(v => v.similarityScore));
 
-        const isFullConsensus = consensusRatio === 1;
-        const isPartialConsensus = consensusRatio >= PARTIAL_CONSENSUS_THRESHOLD;
-        const consensusReached = isPartialConsensus;
+        // Consensus thresholds:
+        // Full consensus: all vote YES AND min confidence >= 85% → STOP discussion
+        // Partial consensus: >= 67% vote YES but confidence < 85% → CONTINUE discussion
+        // No consensus: < 67% vote YES → CONTINUE discussion
+        // Goal: push models to refine positions, admit errors, change opinions
+        const isFullConsensus = consensusRatio === 1 && minScore >= 0.85;
+        const isPartialConsensus = !isFullConsensus && consensusRatio >= PARTIAL_CONSENSUS_THRESHOLD;
+        // Only FULL consensus stops the discussion
+        const consensusReached = isFullConsensus;
+
+        console.log(`[Consensus] Votes: ${yesVotes}/${totalVotes}, Avg: ${(avgScore * 100).toFixed(0)}%, Min: ${(minScore * 100).toFixed(0)}%`);
+        console.log(`[Consensus] Full: ${isFullConsensus}, Partial: ${isPartialConsensus}, Reached: ${consensusReached}`);
 
         // Collect all syntheses
         const syntheses = votes
           .filter(v => v.synthesis && v.synthesis.length > 10)
           .map(v => ({ modelName: v.modelName, synthesis: v.synthesis }));
 
-        // Skip Sonnet analysis - use simple merge for speed
+        // Use Sonnet to analyze and group similar points
         let finalAgreements: GroupedAgreement[];
         let finalDisagreements: GroupedDisagreement[];
-        
-        // Simple unique merge
-        const rawAgreements = [...new Set(votes.flatMap(v => v.keyAgreements))];
-        const rawDisagreements = [...new Set(votes.flatMap(v => v.keyDisagreements))];
-        
-        finalAgreements = rawAgreements.slice(0, 7).map(point => ({
-          point,
-          count: votes.filter(v => v.keyAgreements.includes(point)).length,
-          models: votes.filter(v => v.keyAgreements.includes(point)).map(v => v.modelName),
-        }));
-        finalDisagreements = rawDisagreements.slice(0, 5).map(point => ({
-          point,
-          sides: [],
-        }));
+
+        const analyzedPoints = await analyzePointsWithSonnet(votes, send);
+
+        if (analyzedPoints) {
+          finalAgreements = analyzedPoints.agreements;
+          finalDisagreements = analyzedPoints.disagreements;
+        } else {
+          // Fallback to simple merge if Sonnet fails
+          const rawAgreements = [...new Set(votes.flatMap(v => v.keyAgreements))];
+          const rawDisagreements = [...new Set(votes.flatMap(v => v.keyDisagreements))];
+
+          finalAgreements = rawAgreements.slice(0, 7).map(point => ({
+            point,
+            count: votes.filter(v => v.keyAgreements.includes(point)).length,
+            models: votes.filter(v => v.keyAgreements.includes(point)).map(v => v.modelName),
+          }));
+          finalDisagreements = rawDisagreements.slice(0, 5).map(point => ({
+            point,
+            sides: [],
+          }));
+        }
 
         // Find best answer (highest average mention or score)
         const bestAnswerVotes: Record<string, number> = {};
