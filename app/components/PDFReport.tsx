@@ -7,16 +7,35 @@ export interface ModelResponse {
   responses: { round: number; text: string; isInitial: boolean }[];
 }
 
+export interface GroupedAgreement {
+  point: string;
+  count: number;
+  models: string[];
+}
+
+export interface DisagreementSide {
+  position: string;
+  models: string[];
+}
+
+export interface GroupedDisagreement {
+  point: string;
+  sides: DisagreementSide[];
+}
+
 export interface ConsensusResult {
   consensus_reached: boolean;
+  consensus_type?: 'full' | 'partial' | 'none';
   similarity_score: number;
   synthesis?: string;
   syntheses?: { modelName: string; synthesis: string }[];
   camps?: { position: string; participants: string[] }[];
-  key_agreements: string[];
-  key_disagreements: string[];
+  key_agreements: GroupedAgreement[];
+  key_disagreements: GroupedDisagreement[];
   closest_to_truth?: string;
   closest_to_truth_reason?: string;
+  votes?: { yes: number; total: number; ratio: number };
+  individual_votes?: { model: string; vote: string; score: number; reasoning: string }[];
 }
 
 export interface ReportData {
@@ -86,8 +105,9 @@ function generateMarkdown(data: ReportData): string {
   if (data.consensusResult.key_agreements?.length > 0) {
     lines.push('### ✅ All Agree');
     lines.push('');
-    for (const point of data.consensusResult.key_agreements) {
-      lines.push(`- ${point}`);
+    for (const agreement of data.consensusResult.key_agreements) {
+      const modelsStr = agreement.models?.length > 0 ? ` (${agreement.models.join(', ')})` : '';
+      lines.push(`- ${agreement.point}${modelsStr}`);
     }
     lines.push('');
   }
@@ -96,8 +116,13 @@ function generateMarkdown(data: ReportData): string {
   if (data.consensusResult.key_disagreements?.length > 0) {
     lines.push('### ❌ Differences');
     lines.push('');
-    for (const point of data.consensusResult.key_disagreements) {
-      lines.push(`- ${point}`);
+    for (const disagreement of data.consensusResult.key_disagreements) {
+      lines.push(`- **${disagreement.point}**`);
+      if (disagreement.sides?.length > 0) {
+        for (const side of disagreement.sides) {
+          lines.push(`  - ${side.models.join(', ')}: ${side.position}`);
+        }
+      }
     }
     lines.push('');
   }
