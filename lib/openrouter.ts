@@ -2,8 +2,20 @@
 
 import OpenAI from 'openai';
 
+export interface ModelConfig {
+  id: string;
+  name: string;
+  color: string;
+  tier: string;
+  supportsFiles: boolean;
+  supportedFileTypes: string[];
+  reasoning?: boolean;
+  baseModel?: string;
+  reasoningEnabled?: boolean;
+}
+
 // SOTA Models - January 2026
-export const AVAILABLE_MODELS = [
+export const AVAILABLE_MODELS: ModelConfig[] = [
   // Flagship tier
   { 
     id: 'openai/gpt-5.2-pro', 
@@ -80,18 +92,6 @@ export const AVAILABLE_MODELS = [
     supportedFileTypes: ['image', 'pdf'],
   },
 ];
-
-export interface ModelConfig {
-  id: string;
-  name: string;
-  color: string;
-  tier: string;
-  supportsFiles: boolean;
-  supportedFileTypes: string[];
-  reasoning?: boolean;
-  baseModel?: string;
-  reasoningEnabled?: boolean;
-}
 
 export function createOpenRouterClient() {
   return new OpenAI({
