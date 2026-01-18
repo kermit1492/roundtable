@@ -595,7 +595,7 @@ export async function POST(request: NextRequest) {
           .join('\n\n---\n\n');
 
         // Helper function to get a single vote with retries
-        async function getVoteWithRetry(modelId: string): Promise<VoteResult> {
+        const getVoteWithRetry = async (modelId: string): Promise<VoteResult> => {
           const modelName = getModelName(modelId);
           
           const voteMessages = [
