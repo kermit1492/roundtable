@@ -711,7 +711,7 @@ export default function Home() {
               className="w-8 h-8 rounded-lg flex items-center justify-center"
               style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-text)' }}
             >
-              <span className="text-sm font-bold">RT</span>
+              <span className="text-sm font-bold">ai</span>
             </div>
             <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>Roundtable</span>
           </div>
