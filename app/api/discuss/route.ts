@@ -624,49 +624,26 @@ export async function POST(request: NextRequest) {
               const jsonMatch = voteResponse.match(/\{[\s\S]*\}/);
               if (jsonMatch) {
                 console.log(`[${modelName}] JSON found, parsing...`);
-                try {
-                  // Use robust sanitization
-                  const jsonStr = sanitizeJsonString(jsonMatch[0]);
-                  console.log(`[${modelName}] Sanitized JSON (first 300):`, jsonStr.slice(0, 300));
-                  
-                  const parsed = JSON.parse(jsonStr);
-                  
-                  const result: VoteResult = {
-                    modelId,
-                    modelName,
-                    consensusReached: Boolean(parsed.consensus_reached),
-                    similarityScore: Number(parsed.similarity_score) || 0,
-                    reasoning: parsed.reasoning || '',
-                    synthesis: parsed.synthesis || '',
-                    keyAgreements: parsed.key_agreements || [],
-                    keyDisagreements: parsed.key_disagreements || [],
-                  };
+                // Use robust sanitization
+                const jsonStr = sanitizeJsonString(jsonMatch[0]);
+                console.log(`[${modelName}] Sanitized JSON (first 300):`, jsonStr.slice(0, 300));
+                
+                const parsed = JSON.parse(jsonStr);
+                
+                const result: VoteResult = {
+                  modelId,
+                  modelName,
+                  consensusReached: Boolean(parsed.consensus_reached),
+                  similarityScore: Number(parsed.similarity_score) || 0,
+                  reasoning: parsed.reasoning || '',
+                  synthesis: parsed.synthesis || '',
+                  keyAgreements: parsed.key_agreements || [],
+                  keyDisagreements: parsed.key_disagreements || [],
+                };
 
-                  console.log(`[${modelName}] Vote parsed successfully: consensus=${result.consensusReached}, score=${result.similarityScore}`);
-                  send('model_voted', { model: modelId, modelName, vote: result });
-                  return result;
-                } catch (parseError) {
-                  console.error(`[${modelName}] JSON parse error:`, parseError);
-                  // Log the problematic area
-                  const errorMsg = String(parseError);
-                  const posMatch = errorMsg.match(/position (\d+)/);
-                  if (posMatch) {
-                    const pos = parseInt(posMatch[1]);
-                    const start = Math.max(0, pos - 50);
-                    const end = Math.min(jsonStr.length, pos + 50);
-                    console.error(`[${modelName}] Error at position ${pos} in SANITIZED JSON, context: ...${jsonStr.slice(start, end)}...`);
-                    // Show character codes around the error in sanitized string
-                    const charCodes = jsonStr.slice(Math.max(0, pos - 5), pos + 5)
-                      .split('').map(c => `${c}(${c.charCodeAt(0)})`).join(' ');
-                    console.error(`[${modelName}] Char codes in sanitized around error: ${charCodes}`);
-                  }
-                  // Also show raw JSON context
-                  if (posMatch) {
-                    const pos = parseInt(posMatch[1]);
-                    console.error(`[${modelName}] Raw JSON around pos ${pos}: ...${jsonMatch[0].slice(Math.max(0,pos-50), pos+50)}...`);
-                  }
-                  throw new Error(`JSON parse failed: ${parseError}`);
-                }
+                console.log(`[${modelName}] Vote parsed successfully: consensus=${result.consensusReached}, score=${result.similarityScore}`);
+                send('model_voted', { model: modelId, modelName, vote: result });
+                return result;
               } else {
                 console.error(`[${modelName}] No JSON found in response`);
                 console.error(`[${modelName}] Full response:`, voteResponse);
