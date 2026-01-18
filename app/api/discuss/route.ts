@@ -717,32 +717,23 @@ export async function POST(request: NextRequest) {
           .filter(v => v.synthesis && v.synthesis.length > 10)
           .map(v => ({ modelName: v.modelName, synthesis: v.synthesis }));
 
-        // Analyze and group key points with Sonnet
-        send('analyzing_points', { status: 'starting' });
-        const analyzedPoints = await analyzePointsWithSonnet(votes, send);
-        
-        // Fallback to simple merge if Sonnet fails
+        // Skip Sonnet analysis - use simple merge for speed
         let finalAgreements: GroupedAgreement[];
         let finalDisagreements: GroupedDisagreement[];
         
-        if (analyzedPoints) {
-          finalAgreements = analyzedPoints.agreements;
-          finalDisagreements = analyzedPoints.disagreements;
-        } else {
-          // Fallback: simple unique merge (old behavior)
-          const rawAgreements = [...new Set(votes.flatMap(v => v.keyAgreements))];
-          const rawDisagreements = [...new Set(votes.flatMap(v => v.keyDisagreements))];
-          
-          finalAgreements = rawAgreements.slice(0, 7).map(point => ({
-            point,
-            count: 1,
-            models: ['Unknown'],
-          }));
-          finalDisagreements = rawDisagreements.slice(0, 5).map(point => ({
-            point,
-            sides: [],
-          }));
-        }
+        // Simple unique merge
+        const rawAgreements = [...new Set(votes.flatMap(v => v.keyAgreements))];
+        const rawDisagreements = [...new Set(votes.flatMap(v => v.keyDisagreements))];
+        
+        finalAgreements = rawAgreements.slice(0, 7).map(point => ({
+          point,
+          count: votes.filter(v => v.keyAgreements.includes(point)).length,
+          models: votes.filter(v => v.keyAgreements.includes(point)).map(v => v.modelName),
+        }));
+        finalDisagreements = rawDisagreements.slice(0, 5).map(point => ({
+          point,
+          sides: [],
+        }));
 
         // Find best answer (highest average mention or score)
         const bestAnswerVotes: Record<string, number> = {};
