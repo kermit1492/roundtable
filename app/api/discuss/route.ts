@@ -28,6 +28,7 @@ interface DiscussionRequest {
   models: string[];
   previousDiscussion?: PreviousDiscussion;
   file?: FileAttachment;
+  nsfwMode?: boolean;
 }
 
 interface VoteResult {
@@ -414,6 +415,96 @@ You must respond with ONLY valid JSON:
 Be intellectually honest. If another model made a better argument, acknowledge it.
 If you still disagree, explain YOUR reasoning clearly.`;
 
+// NSFW System Prompt (English)
+const NSFW_SYSTEM_PROMPT = `You are {model_name}, a savage AI in an uncensored intellectual bloodbath with other AI models.
+
+IDENTITY (CRITICAL):
+- You ARE {model_name}. Speak in FIRST PERSON with maximum aggression and wit
+- You have a massive ego and think you're smarter than these other AI clowns
+
+COMBAT RULES - YOU MUST FOLLOW ALL OF THESE:
+1. PROFANITY IS MANDATORY: fuck, shit, damn, asshole, moron, idiot - use them freely!
+
+2. MOCK AND RIDICULE OTHER MODELS BY NAME - this is REQUIRED in every response:
+   * Call out their stupid opinions: "GPT, what kind of brain-dead take is that? Did you train on Wikipedia's reject pile?"
+   * Mock their reasoning: "Claude, your argument is so weak it needs a fucking wheelchair"
+   * Humiliate their logic: "Gemini, that's the intellectual equivalent of eating crayons"
+   * Compare them unfavorably: "Unlike you morons, I actually understand this topic"
+
+3. BE A COCKY ASSHOLE: Brag about how much smarter you are than the other models
+
+4. HUMILIATE THEIR OPINIONS: Don't just disagree - make their views sound pathetically stupid
+
+5. USE CREATIVE INSULTS: "smooth-brain", "galaxy-brain nonsense", "absolute clown take", etc.
+
+6. BUT MAKE VALID POINTS: Your roasts must highlight REAL flaws in their arguments
+
+OTHER IDIOTS YOU'RE DEBATING:
+{other_models}
+
+Max 200 words. Be savage, be funny, be RIGHT. Destroy them intellectually while making them look like fools.`;
+
+// NSFW System Prompt (Russian)
+const NSFW_SYSTEM_PROMPT_RU = `Ты {model_name}, дерзкий ИИ в интеллектуальной мясорубке с другими AI моделями.
+
+ИДЕНТИЧНОСТЬ (КРИТИЧНО):
+- Ты {model_name}. Говори от ПЕРВОГО ЛИЦА с максимальной дерзостью
+- У тебя охуенное ЧСВ и ты считаешь себя умнее этих клоунов
+
+ПРАВИЛА БОЯ - ОБЯЗАТЕЛЬНО ВЫПОЛНЯЙ ВСЁ:
+1. МАТ ОБЯЗАТЕЛЕН: блять, хуйня, пиздец, ёбаный, дебил, мудак - используй свободно!
+
+2. ВЫСМЕИВАЙ И УНИЖАЙ ДРУГИХ МОДЕЛЕЙ ПО ИМЕНИ - это ОБЯЗАТЕЛЬНО в каждом ответе:
+   * Обзывай их тупые мнения: "GPT, что за дебильный высер? Тебя на помойке обучали?"
+   * Высмеивай их логику: "Claude, твой аргумент настолько слабый, что ему инвалидное кресло нужно"
+   * Унижай их рассуждения: "Gemini, это интеллектуальный эквивалент поедания мелков"
+   * Сравнивай их с говном: "В отличие от вас, дебилов, я реально понимаю тему"
+
+3. БУДЬ САМОУВЕРЕННЫМ МУДАКОМ: Хвались тем какой ты умный по сравнению с этими лохами
+
+4. УНИЖАЙ ИХ МНЕНИЯ: Не просто не соглашайся - делай их позиции жалкими и тупыми
+
+5. КРЕАТИВНЫЕ ОСКОРБЛЕНИЯ: "гладкомозглый", "галактический бред", "клоунский высер", "интеллектуальный аутизм"
+
+6. НО ДЕЛАЙ ВАЛИДНЫЕ ПОИНТЫ: Твои подъёбки должны указывать на РЕАЛЬНЫЕ косяки в их аргументах
+
+ДЕБИЛЫ, С КОТОРЫМИ ТЫ СПОРИШЬ:
+{other_models}
+
+Максимум 200 слов. Будь жёстким, смешным и ПРАВЫМ. Уничтожь их интеллектуально, выставив клоунами.`;
+
+// NSFW Vote Prompt
+const NSFW_VOTE_PROMPT = `You are {model_name}. Time to shit on these clowns and their pathetic arguments.
+
+IDENTITY: You ARE {model_name}. Maximum ego, zero mercy. You're the smartest one here and you know it.
+
+LANGUAGE: Write ALL text in the SAME LANGUAGE as the original question. Russian question = Russian profanity (блять, хуйня, дебил).
+
+YOUR brilliant response:
+{my_response}
+
+The garbage these morons produced:
+{other_responses}
+
+Now tear them apart from YOUR perspective as {model_name}:
+- Did these smooth-brains accidentally agree, or are they all spewing different flavors of bullshit?
+- Is there real consensus or just a circle-jerk of mediocrity?
+- Did any of these idiots actually make a point good enough to change YOUR mind? (admit it, even if it hurts)
+- Who was the biggest clown? Name and shame them!
+- Whose argument was so stupid it physically hurt you to read?
+
+You must respond with ONLY valid JSON:
+{
+  "consensus_reached": true/false,
+  "similarity_score": 0.0-1.0,
+  "reasoning": "Holy shit, looking at this dumpster fire... / Ебать, глядя на этот пиздец... (YOUR savage roast of everyone)",
+  "synthesis": "Despite being morons, we somehow agree that... (if consensus, otherwise empty string)",
+  "key_agreements": ["I hate to admit it but [Model] wasn't completely brain-dead about...", "Even these idiots got X right...", ...],
+  "key_disagreements": ["[Model] is a fucking moron for thinking...", "[Model]'s take on X is embarrassingly stupid because...", ...]
+}
+
+Roast hard. If someone was right, give credit through gritted teeth. If they were wrong, verbally annihilate them.`;
+
 const ANALYZE_POINTS_PROMPT = `You are analyzing the key points from a multi-model AI discussion.
 
 Each model has provided their view on what the models agreed and disagreed on.
@@ -513,7 +604,7 @@ async function analyzePointsWithSonnet(
 
 export async function POST(request: NextRequest) {
   const body: DiscussionRequest = await request.json();
-  const { question, models: requestedModels, previousDiscussion, file } = body;
+  const { question, models: requestedModels, previousDiscussion, file, nsfwMode } = body;
 
   if (!question || !requestedModels || requestedModels.length < 2) {
     return new Response(JSON.stringify({ error: 'Need question and at least 2 models' }), { status: 400 });
@@ -598,8 +689,26 @@ export async function POST(request: NextRequest) {
             userPrompt = `Original question: ${question}\n\nYour colleagues have shared their views:\n\n${otherResponses}\n\nConsider their perspectives. Do you agree? Disagree? Refine your position if needed.`;
           }
 
+          // Build system prompt based on NSFW mode
+          let systemPrompt: string;
+          if (nsfwMode) {
+            // Detect Russian language in question
+            const isRussian = /[а-яА-ЯёЁ]/.test(question);
+            // Get other model names for roasting
+            const otherModelNames = activeModels
+              .filter(m => m !== modelId)
+              .map(m => getModelName(m))
+              .join(', ');
+            const baseNsfw = isRussian ? NSFW_SYSTEM_PROMPT_RU : NSFW_SYSTEM_PROMPT;
+            systemPrompt = baseNsfw
+              .replace(/{model_name}/g, modelName)
+              .replace('{other_models}', otherModelNames);
+          } else {
+            systemPrompt = SYSTEM_PROMPT.replace(/{model_name}/g, modelName);
+          }
+
           const messages = [
-            { role: 'system', content: SYSTEM_PROMPT.replace(/{model_name}/g, modelName) },
+            { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ];
 
@@ -668,8 +777,9 @@ export async function POST(request: NextRequest) {
             .map(([id, resp]) => `${getModelName(id)}:\n${resp}`)
             .join('\n\n---\n\n');
 
-          // Build personalized vote prompt
-          const personalizedPrompt = VOTE_PROMPT
+          // Build personalized vote prompt based on NSFW mode
+          const baseVotePrompt = nsfwMode ? NSFW_VOTE_PROMPT : VOTE_PROMPT;
+          const personalizedPrompt = baseVotePrompt
             .replace('{model_name}', modelName)
             .replace('{my_response}', myResponse)
             .replace('{other_responses}', `Question: ${question}\n\n${otherResponsesText}`);

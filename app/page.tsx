@@ -182,6 +182,7 @@ export default function Home() {
   const [thread, setThread] = useState<DiscussionEntry[]>([]);
   const [file, setFile] = useState<FileAttachment | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [nsfwMode, setNsfwMode] = useState(false);
   const [discussion, setDiscussion] = useState({
     status: 'idle' as 'idle' | 'running' | 'complete' | 'error',
     phase: 'idle' as string,
@@ -221,7 +222,20 @@ export default function Home() {
       setTheme(saved);
       document.documentElement.setAttribute('data-theme', saved);
     }
+    // Load NSFW mode from localStorage
+    const savedNsfw = localStorage.getItem('roundtable-nsfw-mode');
+    if (savedNsfw === 'true') {
+      setNsfwMode(true);
+    }
   }, []);
+
+  const toggleNsfwMode = () => {
+    setNsfwMode(prev => {
+      const newValue = !prev;
+      localStorage.setItem('roundtable-nsfw-mode', String(newValue));
+      return newValue;
+    });
+  };
 
   useEffect(() => {
     if (discussion.status === 'running') {
@@ -731,6 +745,7 @@ export default function Home() {
           models: selectedModels,
           previousDiscussion,
           file: file || undefined,
+          nsfwMode,
         }),
         signal: abortControllerRef.current?.signal,
       });
@@ -867,6 +882,22 @@ export default function Home() {
                 <MoonIcon />
               </button>
             </div>
+            {/* NSFW Toggle */}
+            <button
+              onClick={toggleNsfwMode}
+              disabled={discussion.status === 'running'}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${
+                discussion.status === 'running' ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'
+              }`}
+              style={{
+                backgroundColor: nsfwMode ? '#ef4444' : 'var(--bg-tertiary)',
+                color: nsfwMode ? '#fff' : 'var(--text-secondary)',
+                borderColor: nsfwMode ? '#ef4444' : 'var(--border-primary)',
+              }}
+              title={nsfwMode ? 'NSFW Mode: Models will roast each other' : 'Safe Mode: Normal discussion'}
+            >
+              {nsfwMode ? '🔥 NSFW' : '🔒 Safe'}
+            </button>
             {hasActiveThread && (
               <button onClick={startNewThread} className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                 + New thread
@@ -914,8 +945,16 @@ export default function Home() {
         {/* Input area */}
         <div
           className="rounded-2xl border p-6 mb-8 shadow-sm"
-          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: nsfwMode ? '#fecaca' : 'var(--border-primary)' }}
         >
+          {nsfwMode && (
+            <div
+              className="mb-3 px-3 py-1.5 rounded-lg text-xs font-medium inline-flex items-center gap-1"
+              style={{ backgroundColor: '#fef2f2', color: '#dc2626' }}
+            >
+              🔥 NSFW Mode: Модели будут троллить друг друга с матом и юмором
+            </div>
+          )}
           <textarea
             value={question}
             onChange={e => {
