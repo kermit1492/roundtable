@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { generatePDF, downloadPDF, type ReportData, type ModelResponse } from './components/PDFReport';
+import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, type ReportData, type ModelResponse } from './components/PDFReport';
 
 const AVAILABLE_MODELS = [
   // Flagship tier
@@ -94,6 +94,10 @@ interface ConsensusResult {
   key_disagreements: GroupedDisagreement[];
   closest_to_truth?: string;
   closest_to_truth_reason?: string;
+  // Final round information
+  is_final_round?: boolean;
+  models_agreed?: string[];
+  models_disagreed?: string[];
 }
 
 interface DiscussionEntry {
@@ -189,6 +193,21 @@ export default function Home() {
     completedCount: 0,
     totalCount: 0,
     currentQuestion: '',
+    // Stuck detection
+    lastActivityTime: Date.now(),
+    isStuck: false,
+    // Voting history for export
+    allVotingResults: {} as Record<number, {
+      votes: Array<{
+        modelName: string;
+        consensusReached: boolean;
+        similarityScore: number;
+        reasoning: string;
+      }>;
+      consensusType: string;
+      yesCount: number;
+      totalCount: number;
+    }>,
   });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -220,6 +239,22 @@ export default function Home() {
       setTimeout(() => consensusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
     }
   }, [discussion.status]);
+
+  // Stuck detection - check if no activity for 2 minutes
+  useEffect(() => {
+    if (discussion.status !== 'running') return;
+
+    const STUCK_THRESHOLD_MS = 120000; // 2 minutes
+    const checkInterval = setInterval(() => {
+      const timeSinceActivity = Date.now() - discussion.lastActivityTime;
+      if (timeSinceActivity > STUCK_THRESHOLD_MS && !discussion.isStuck) {
+        console.warn('Discussion appears stuck - no activity for 2 minutes');
+        setDiscussion(p => ({ ...p, isStuck: true }));
+      }
+    }, 10000); // Check every 10 seconds
+
+    return () => clearInterval(checkInterval);
+  }, [discussion.status, discussion.lastActivityTime, discussion.isStuck]);
 
   const changeTheme = (newTheme: Theme) => {
     setTheme(newTheme);
@@ -292,6 +327,9 @@ export default function Home() {
       completedCount: 0,
       totalCount: 0,
       currentQuestion: '',
+      lastActivityTime: Date.now(),
+      isStuck: false,
+      allVotingResults: {},
     });
     setQuestion('');
   };
@@ -359,12 +397,74 @@ export default function Home() {
         iterations: discussion.iteration,
         models,
         consensusResult: discussion.consensusResult,
+        votingHistory: discussion.allVotingResults,
       };
 
       console.log('Generating PDF with data:', reportData);
       const blob = await generatePDF(reportData);
       console.log('PDF blob generated:', blob);
       downloadPDF(blob, `AI_Roundtable_${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (e) {
+      console.error(e);
+    }
+    setExporting(false);
+  };
+
+  const handleExportDOCX = async () => {
+    console.log('Export DOCX clicked');
+    if (!discussion.consensusResult) {
+      console.log('No consensus result, returning');
+      return;
+    }
+    setExporting(true);
+    try {
+      const models: ModelResponse[] = Object.keys(discussion.modelStates).map(modelId => {
+        const model = getModel(modelId);
+        const state = discussion.modelStates[modelId];
+        const responses: { round: number; text: string; isInitial: boolean }[] = [];
+
+        state.history.forEach((text, idx) => {
+          responses.push({ round: idx + 1, text, isInitial: idx === 0 });
+        });
+
+        if (state.currentResponse) {
+          const lastHistoryEntry = state.history[state.history.length - 1];
+          if (state.currentResponse !== lastHistoryEntry) {
+            responses.push({
+              round: state.history.length + 1,
+              text: state.currentResponse,
+              isInitial: state.history.length === 0,
+            });
+          }
+        }
+
+        return {
+          modelId,
+          modelName: model?.name || modelId,
+          color: model?.color || '#888',
+          responses,
+        };
+      });
+
+      const reportData: ReportData = {
+        question: discussion.currentQuestion,
+        date: new Date().toLocaleDateString('ru-RU', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        iterations: discussion.iteration,
+        models,
+        consensusResult: discussion.consensusResult,
+        votingHistory: discussion.allVotingResults,
+      };
+
+      console.log('Generating DOCX with data:', reportData);
+      const blob = await generateDOCX(reportData);
+      console.log('DOCX blob generated:', blob);
+      downloadDOCX(blob, `AI_Roundtable_${new Date().toISOString().split('T')[0]}.docx`);
     } catch (e) {
       console.error(e);
     }
@@ -425,7 +525,7 @@ export default function Home() {
             currentResponse: ns[id].currentResponse + (data.token as string),
             retrying: false,
           };
-          return { ...p, modelStates: ns };
+          return { ...p, modelStates: ns, lastActivityTime: Date.now(), isStuck: false };
         });
         break;
 
@@ -521,7 +621,7 @@ export default function Home() {
             score: vote.similarityScore,
             reasoning: vote.reasoning,
           };
-          return { ...p, votingStates: vs };
+          return { ...p, votingStates: vs, lastActivityTime: Date.now(), isStuck: false };
         });
         break;
 
@@ -552,11 +652,29 @@ export default function Home() {
           status: 'complete',
           phase: 'idle',
           consensusResult: data.result as ConsensusResult,
+          allVotingResults: (data.allVotingResults || {}) as typeof p.allVotingResults,
         }));
         break;
 
       case 'error':
         setDiscussion(p => ({ ...p, status: 'error' }));
+        break;
+
+      case 'heartbeat':
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
+      case 'timeout':
+        setDiscussion(p => ({
+          ...p,
+          status: 'error',
+          phase: 'timeout',
+        }));
+        break;
+
+      case 'voting_partial_failure':
+        // Just a warning, don't change status
+        console.warn('Voting partial failure:', data);
         break;
     }
   };
@@ -590,6 +708,9 @@ export default function Home() {
       completedCount: 0,
       totalCount: selectedModels.length,
       currentQuestion,
+      lastActivityTime: Date.now(),
+      isStuck: false,
+      allVotingResults: {},
     });
 
     const prev = thread.length > 0 ? thread[thread.length - 1] : null;
@@ -680,9 +801,12 @@ export default function Home() {
 
   const getPhaseText = () => {
     const { phase, iteration, completedCount, totalCount } = discussion;
-    if (phase === 'thinking') return `Round ${iteration}: Models thinking... (${completedCount}/${totalCount})`;
-    if (phase === 'all_complete') return `Round ${iteration}: All done ✓`;
-    if (phase === 'voting') return `Models voting on consensus...`;
+    const isFinalRound = iteration === 5;
+    const roundLabel = isFinalRound ? `Round ${iteration} (FINAL)` : `Round ${iteration}`;
+
+    if (phase === 'thinking') return `${roundLabel}: Models thinking... (${completedCount}/${totalCount})`;
+    if (phase === 'all_complete') return `${roundLabel}: All done ✓`;
+    if (phase === 'voting') return isFinalRound ? `Final voting on consensus...` : `Models voting on consensus...`;
     if (phase === 'analyzing') return `Analyzing key points with Sonnet...`;
     if (phase === 'next_round') return `Preparing round ${iteration + 1}...`;
     return '';
@@ -980,7 +1104,26 @@ export default function Home() {
                 }}
               />
             </div>
-            
+
+            {/* Stuck detection warning */}
+            {discussion.isStuck && (
+              <div
+                className="mt-3 p-3 rounded-lg border flex items-center justify-between"
+                style={{ backgroundColor: '#fef3c7', borderColor: '#f59e0b' }}
+              >
+                <span className="text-sm" style={{ color: '#92400e' }}>
+                  ⚠️ Discussion appears stuck — no activity for 2 minutes
+                </span>
+                <button
+                  onClick={stopDiscussion}
+                  className="ml-3 px-3 py-1 rounded text-sm font-medium"
+                  style={{ backgroundColor: '#f59e0b', color: '#fff' }}
+                >
+                  Stop and show results
+                </button>
+              </div>
+            )}
+
             {/* Voting Status Panel - show during voting and analyzing phases */}
             {(discussion.phase === 'voting' || discussion.phase === 'analyzing') && Object.keys(discussion.votingStates).length > 0 && (
               <div className="mt-4 pt-4 border-t" style={{ borderColor: 'var(--border-secondary)' }}>
@@ -1088,19 +1231,25 @@ export default function Home() {
                     ref={el => { columnRefs.current[modelId] = el; }}
                     className="flex-1 p-5 max-h-[500px] overflow-y-auto"
                   >
-                    {state.history.map((resp, idx) => (
-                      <div key={idx} className="mb-4 pb-4 border-b" style={{ borderColor: 'var(--border-secondary)' }}>
-                        <div className="text-xs mb-2 font-medium" style={{ color: idx === 0 ? '#3b82f6' : '#7c3aed' }}>
-                          {idx === 0 ? 'Round 1 — Initial' : `Round ${idx + 1} — Response`}
+                    {state.history.map((resp, idx) => {
+                      const roundNum = idx + 1;
+                      const isFinal = roundNum === 5;
+                      return (
+                        <div key={idx} className="mb-4 pb-4 border-b" style={{ borderColor: 'var(--border-secondary)' }}>
+                          <div className="text-xs mb-2 font-medium flex items-center gap-2" style={{ color: idx === 0 ? '#3b82f6' : '#7c3aed' }}>
+                            {idx === 0 ? 'Round 1 — Initial' : `Round ${roundNum} — Response`}
+                            {isFinal && <span className="px-1.5 py-0.5 rounded text-xs bg-purple-100 text-purple-700">FINAL</span>}
+                          </div>
+                          <div className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>{resp}</div>
                         </div>
-                        <div className="text-sm whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>{resp}</div>
-                      </div>
-                    ))}
+                      );
+                    })}
 
                     {state.currentResponse && (
                       <>
-                        <div className="text-xs mb-2 font-medium" style={{ color: state.history.length === 0 ? '#3b82f6' : '#7c3aed' }}>
+                        <div className="text-xs mb-2 font-medium flex items-center gap-2" style={{ color: state.history.length === 0 ? '#3b82f6' : '#7c3aed' }}>
                           {state.history.length === 0 ? 'Round 1 — Initial' : `Round ${state.history.length + 1} — Response`}
+                          {state.history.length + 1 === 5 && <span className="px-1.5 py-0.5 rounded text-xs bg-purple-100 text-purple-700">FINAL</span>}
                         </div>
                         <div
                           className={`text-sm whitespace-pre-wrap ${state.streaming ? 'animate-pulse' : ''}`}
@@ -1157,6 +1306,11 @@ export default function Home() {
                       : discussion.consensusResult.consensus_type === 'partial'
                         ? '⚡ Partial Consensus'
                         : '❌ No Consensus'}
+                    {discussion.consensusResult.is_final_round && (
+                      <span className="ml-2 text-sm font-medium px-2 py-0.5 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                        FINAL
+                      </span>
+                    )}
                   </h3>
                   <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                     {discussion.consensusResult.votes
@@ -1164,16 +1318,35 @@ export default function Home() {
                       : 'No vote data'
                     } • Avg confidence: {Math.round(discussion.consensusResult.similarity_score * 100)}% • {discussion.iteration} round{discussion.iteration > 1 ? 's' : ''}
                   </p>
+                  {/* Show which models agreed/disagreed */}
+                  {discussion.consensusResult.consensus_type !== 'full' && discussion.consensusResult.models_agreed && discussion.consensusResult.models_agreed.length > 0 && (
+                    <div className="mt-2 text-sm">
+                      <span style={{ color: 'var(--success-text)' }}>Agreed: {discussion.consensusResult.models_agreed.join(', ')}</span>
+                      {discussion.consensusResult.models_disagreed && discussion.consensusResult.models_disagreed.length > 0 && (
+                        <span style={{ color: 'var(--error-text)' }}> • Disagreed: {discussion.consensusResult.models_disagreed.join(', ')}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
-              <button
-                onClick={handleExportPDF}
-                disabled={exporting}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium disabled:opacity-50"
-                style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-text)' }}
-              >
-                <DownloadIcon /> {exporting ? 'Generating...' : 'Export MD'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleExportPDF}
+                  disabled={exporting}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-primary)' }}
+                >
+                  <DownloadIcon /> {exporting ? '...' : 'MD'}
+                </button>
+                <button
+                  onClick={handleExportDOCX}
+                  disabled={exporting}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium disabled:opacity-50"
+                  style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-text)' }}
+                >
+                  <DownloadIcon /> {exporting ? '...' : 'Word'}
+                </button>
+              </div>
             </div>
 
             <div className="h-1.5 rounded-full overflow-hidden mb-8" style={{ backgroundColor: 'var(--bg-tertiary)' }}>

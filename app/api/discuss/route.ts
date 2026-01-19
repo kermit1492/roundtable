@@ -7,6 +7,8 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const MAX_ITERATIONS = 5;
 const PARTIAL_CONSENSUS_THRESHOLD = 0.66; // 2/3 models agree (0.666...)
 const MAX_VOTE_RETRIES = 5; // Each model MUST vote
+const MAX_DISCUSSION_TIMEOUT_MS = 600000; // 10 minutes total discussion timeout
+const HEARTBEAT_INTERVAL_MS = 15000; // 15 seconds heartbeat
 
 interface FileAttachment {
   type: 'image' | 'pdf';
@@ -363,39 +365,54 @@ async function streamModel(
   }
 }
 
-const SYSTEM_PROMPT = `You are an expert participating in a roundtable discussion with other AI models. 
-Your goal is to provide thoughtful, well-reasoned responses and engage constructively with other perspectives.
-Be concise but thorough. Respond in the same language as the question.`;
+const SYSTEM_PROMPT = `You are {model_name}, an expert AI participating in a roundtable discussion with other AI models.
 
-const VOTE_PROMPT = `You are {model_name}, and you just participated in a roundtable discussion.
+IDENTITY RULES (CRITICAL):
+- You ARE {model_name}. Always speak in FIRST PERSON: "I think...", "I believe...", "In my view...", "My analysis shows..."
+- NEVER refer to yourself in third person, as "the model", "this AI", or use "we" when meaning yourself
+- Maintain your distinct perspective and voice throughout the discussion
+- Own your opinions: say "I disagree" not "one might disagree"
 
-CRITICAL: You MUST write ALL text fields (reasoning, synthesis, key_agreements, key_disagreements) in the SAME LANGUAGE as the original question. If the question was in Russian, respond in Russian. If in English, respond in English.
+DISCUSSION RULES:
+- Provide thoughtful, well-reasoned responses
+- Engage constructively with other perspectives
+- Be concise but thorough (max 200 words)
+- Respond in the same language as the question
+- If you change your mind based on arguments, say so explicitly: "I was wrong about X because..."
+- Credit good arguments from others: "I agree with [Model] that..."`;
 
-Here is YOUR response:
+const VOTE_PROMPT = `You are {model_name}. This is YOUR personal assessment of the discussion.
+
+IDENTITY (CRITICAL): You ARE {model_name}. Write EVERYTHING in FIRST PERSON.
+- Use: "I believe...", "I agree...", "My view is...", "I think..."
+- NEVER use: "the model believes", "one might think", "it seems"
+
+LANGUAGE (CRITICAL): Write ALL text fields in the SAME LANGUAGE as the original question.
+
+Here is YOUR response that you wrote:
 {my_response}
 
 Here are the OTHER participants' responses:
 {other_responses}
 
-Now evaluate from YOUR perspective: Do you agree with the other participants? Has consensus been reached?
+Evaluate from YOUR perspective as {model_name}:
+- Do I agree with the other participants' conclusions?
+- Has genuine consensus been reached on the main points?
+- Would I change my position based on their arguments?
+- What specifically do I agree or disagree with?
 
-Consider:
-- Do the other models' conclusions align with yours?
-- Are there points where you disagree with specific participants?
-- Would you change your position based on their arguments?
-
-You must respond with ONLY valid JSON in this exact format:
+You must respond with ONLY valid JSON:
 {
   "consensus_reached": true/false,
   "similarity_score": 0.0-1.0,
-  "reasoning": "I believe... / In my view... (explain your assessment from first-person perspective)",
-  "synthesis": "if consensus reached, write a unified conclusion that captures our shared view (3-5 sentences)",
-  "key_agreements": ["I agree with X that...", "We all concluded that...", ...],
-  "key_disagreements": ["I disagree with X on...", "Unlike Y, I think...", ...]
+  "reasoning": "I believe... / In my assessment... (YOUR first-person evaluation)",
+  "synthesis": "We concluded that... (shared conclusion if consensus, otherwise empty string)",
+  "key_agreements": ["I agree with [Model] that...", "We all recognize that...", ...],
+  "key_disagreements": ["I disagree with [Model] on...", "Unlike [Model], I think...", ...]
 }
 
-Be honest. If you find another model's argument compelling, acknowledge it. If you disagree, explain why.
-IMPORTANT: All text in the JSON fields MUST be in the same language as the original question!`;
+Be intellectually honest. If another model made a better argument, acknowledge it.
+If you still disagree, explain YOUR reasoning clearly.`;
 
 const ANALYZE_POINTS_PROMPT = `You are analyzing the key points from a multi-model AI discussion.
 
@@ -505,13 +522,44 @@ export async function POST(request: NextRequest) {
   const { stream, send, close } = createSSEStream();
 
   (async () => {
+    // Start heartbeat to keep connection alive and detect stale connections
+    const heartbeatInterval = setInterval(() => {
+      send('heartbeat', { timestamp: Date.now() });
+    }, HEARTBEAT_INTERVAL_MS);
+
+    const discussionStartTime = Date.now();
+    const isDiscussionTimedOut = () => Date.now() - discussionStartTime > MAX_DISCUSSION_TIMEOUT_MS;
+
     try {
       const activeModels = [...requestedModels];
       const allResponses: Record<number, Record<string, string>> = {};
+      // Store voting results for each iteration (for export)
+      const allVotingResults: Record<number, {
+        votes: Array<{
+          modelName: string;
+          consensusReached: boolean;
+          similarityScore: number;
+          reasoning: string;
+        }>;
+        consensusType: 'full' | 'partial' | 'none';
+        yesCount: number;
+        totalCount: number;
+      }> = {};
       let iteration = 0;
 
       while (iteration < MAX_ITERATIONS) {
         iteration++;
+
+        // Check overall discussion timeout
+        if (isDiscussionTimedOut()) {
+          console.log('[Discussion] Overall timeout reached');
+          send('timeout', {
+            message: 'Discussion timed out after 10 minutes',
+            iteration,
+            partialResults: allResponses,
+          });
+          break;
+        }
         const isFirstIteration = iteration === 1;
 
         // === PHASE 1: Models respond ===
@@ -551,7 +599,7 @@ export async function POST(request: NextRequest) {
           }
 
           const messages = [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: SYSTEM_PROMPT.replace(/{model_name}/g, modelName) },
             { role: 'user', content: userPrompt },
           ];
 
@@ -723,27 +771,42 @@ export async function POST(request: NextRequest) {
 
         // Get all votes in parallel (each with its own retry logic)
         const votes = await Promise.all(activeModels.map(getVoteWithRetry));
-        
-        // Check if any vote failed
+
+        // Check if any vote failed - allow graceful degradation
         const failedVotes = votes.filter(v => v.failed);
+        const successfulVotes = votes.filter(v => !v.failed);
+
         if (failedVotes.length > 0) {
-          // Critical error - cannot continue without all votes
           const failedModels = failedVotes.map(v => v.modelName).join(', ');
-          console.error(`[Voting] CRITICAL: ${failedVotes.length} model(s) failed to vote: ${failedModels}`);
-          send('voting_error', { 
+          const successfulModels = successfulVotes.map(v => v.modelName).join(', ');
+          console.warn(`[Voting] ${failedVotes.length} model(s) failed to vote: ${failedModels}`);
+
+          send('voting_partial_failure', {
             failedModels: failedVotes.map(v => ({ id: v.modelId, name: v.modelName })),
-            message: `Voting failed: ${failedModels} could not vote after ${MAX_VOTE_RETRIES} attempts each`
+            successfulModels: successfulVotes.map(v => ({ id: v.modelId, name: v.modelName })),
+            message: `${failedModels} could not vote. Continuing with ${successfulModels}.`
           });
-          send('error', { message: `Cannot continue: ${failedModels} failed to vote` });
-          break; // Exit the discussion loop
+
+          // If majority failed, abort the discussion
+          if (failedVotes.length >= successfulVotes.length) {
+            console.error(`[Voting] CRITICAL: Majority of models failed to vote`);
+            send('voting_error', {
+              failedModels: failedVotes.map(v => ({ id: v.modelId, name: v.modelName })),
+              message: `Voting failed: ${failedModels} could not vote after ${MAX_VOTE_RETRIES} attempts each`
+            });
+            send('error', { message: `Cannot continue: majority of models (${failedModels}) failed to vote` });
+            break;
+          }
+          // Otherwise continue with successful votes only
         }
         
-        // === PHASE 3: Tally votes (all votes are now guaranteed successful) ===
-        const yesVotes = votes.filter(v => v.consensusReached).length;
-        const totalVotes = votes.length;
-        const consensusRatio = yesVotes / totalVotes;
-        const avgScore = votes.reduce((sum, v) => sum + v.similarityScore, 0) / totalVotes;
-        const minScore = Math.min(...votes.map(v => v.similarityScore));
+        // === PHASE 3: Tally votes (only count successful votes) ===
+        const validVotes = votes.filter(v => !v.failed);
+        const yesVotes = validVotes.filter(v => v.consensusReached).length;
+        const totalVotes = validVotes.length;
+        const consensusRatio = totalVotes > 0 ? yesVotes / totalVotes : 0;
+        const avgScore = totalVotes > 0 ? validVotes.reduce((sum, v) => sum + v.similarityScore, 0) / totalVotes : 0;
+        const minScore = totalVotes > 0 ? Math.min(...validVotes.map(v => v.similarityScore)) : 0;
 
         // Consensus thresholds:
         // Full consensus: all vote YES AND min confidence >= 85% → STOP discussion
@@ -757,6 +820,19 @@ export async function POST(request: NextRequest) {
 
         console.log(`[Consensus] Votes: ${yesVotes}/${totalVotes}, Avg: ${(avgScore * 100).toFixed(0)}%, Min: ${(minScore * 100).toFixed(0)}%`);
         console.log(`[Consensus] Full: ${isFullConsensus}, Partial: ${isPartialConsensus}, Reached: ${consensusReached}`);
+
+        // Store voting results for this iteration (for export)
+        allVotingResults[iteration] = {
+          votes: validVotes.map(v => ({
+            modelName: v.modelName,
+            consensusReached: v.consensusReached,
+            similarityScore: v.similarityScore,
+            reasoning: v.reasoning,
+          })),
+          consensusType: isFullConsensus ? 'full' : isPartialConsensus ? 'partial' : 'none',
+          yesCount: yesVotes,
+          totalCount: totalVotes,
+        };
 
         // Collect all syntheses
         const syntheses = votes
@@ -824,6 +900,10 @@ export async function POST(request: NextRequest) {
           key_disagreements: finalDisagreements,
           closest_to_truth: closestToTruth,
           closest_to_truth_reason: `Highest confidence in assessment (${Math.round(sortedByScore[0]?.similarityScore * 100)}%)`,
+          // Final round information
+          is_final_round: iteration >= MAX_ITERATIONS,
+          models_agreed: votes.filter(v => v.consensusReached).map(v => v.modelName),
+          models_disagreed: votes.filter(v => !v.consensusReached).map(v => v.modelName),
         };
 
         send('consensus_result', { iteration, result: consensusResult });
@@ -834,6 +914,7 @@ export async function POST(request: NextRequest) {
             iterations: iteration,
             result: consensusResult,
             finalResponses: allResponses[iteration],
+            allVotingResults,
             reason: isFullConsensus ? 'full_consensus' : 'partial_consensus',
           });
           break;
@@ -844,6 +925,7 @@ export async function POST(request: NextRequest) {
             iterations: iteration,
             result: consensusResult,
             finalResponses: allResponses[iteration],
+            allVotingResults,
             reason: 'max_iterations',
           });
           break;
@@ -856,6 +938,8 @@ export async function POST(request: NextRequest) {
       console.error('Discussion error:', error);
       send('error', { message: String(error) });
     } finally {
+      // Clean up heartbeat interval
+      clearInterval(heartbeatInterval);
       send('done', {});
       close();
     }
