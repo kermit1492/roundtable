@@ -160,7 +160,7 @@ async function callModel(
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 sec timeout
+      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 sec timeout (optimized for Vercel)
       
       if (attempt > 1) {
         console.log(`[${modelName}] Retry attempt ${attempt}/${retries}...`);
@@ -235,8 +235,8 @@ async function callModel(
         console.error(`[${modelName}] All ${retries} attempts failed`);
         throw error;
       }
-      // Wait before retry (exponential backoff: 2s, 4s, 8s)
-      const waitTime = 2000 * Math.pow(2, attempt - 1);
+      // Wait before retry (linear: 1s, 2s, 3s - faster for Vercel)
+      const waitTime = 1000 * attempt;
       console.log(`[${modelName}] Waiting ${waitTime/1000}s before retry...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
@@ -252,7 +252,7 @@ async function streamModel(
   maxTokens: number = MAX_RESPONSE_TOKENS
 ): Promise<string> {
   const actualModelId = getActualModelId(modelId);
-  const STREAM_TIMEOUT_MS = 180000; // 3 minutes max per model
+  const STREAM_TIMEOUT_MS = 90000; // 90 seconds max per model (optimized for Vercel)
   
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
