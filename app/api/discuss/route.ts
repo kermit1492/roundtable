@@ -160,7 +160,7 @@ async function callModel(
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 sec timeout
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 sec timeout
       
       if (attempt > 1) {
         console.log(`[${modelName}] Retry attempt ${attempt}/${retries}...`);
@@ -800,11 +800,14 @@ export async function POST(request: NextRequest) {
               } else {
                 console.log(`[${modelName}] Vote retry ${attempt}/${MAX_VOTE_RETRIES}`);
                 send('model_vote_retrying', { model: modelId, modelName, attempt, maxAttempts: MAX_VOTE_RETRIES });
-                // Wait before retry
-                await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+                // Wait before retry (shorter delays)
+                await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
               }
-              
-              const voteResponse = await callModel(modelId, voteMessages, 4000, 0.3, 2); // Increased to 4000 tokens for voting
+
+              // Send heartbeat before each vote attempt
+              send('heartbeat', { timestamp: Date.now(), context: 'voting', model: modelName });
+
+              const voteResponse = await callModel(modelId, voteMessages, 4000, 0.3, 1); // Reduced retries inside callModel
 
               console.log(`[${modelName}] Vote response length: ${voteResponse.length}`);
               console.log(`[${modelName}] Vote response preview: ${voteResponse.slice(0, 200)}...`);
