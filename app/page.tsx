@@ -174,6 +174,210 @@ function DownloadIcon() {
   );
 }
 
+// Synthesis Mode Components
+function SynthesisProgress({ phase, leadModel }: { phase: string; leadModel: string }) {
+  const phases = [
+    { id: 'analysis', label: 'Analysis', icon: '1' },
+    { id: 'drafting', label: 'Drafting', icon: '2' },
+    { id: 'reviewing', label: 'Review', icon: '3' },
+    { id: 'finalizing', label: 'Finalizing', icon: '4' },
+    { id: 'complete', label: 'Complete', icon: '5' },
+  ];
+
+  const getPhaseIndex = () => {
+    if (phase === 'synthesis_analysis' || phase === 'analysis') return 0;
+    if (phase === 'synthesis_drafting' || phase === 'drafting' || phase === 'draft_complete') return 1;
+    if (phase === 'synthesis_reviewing' || phase === 'reviewing') return 2;
+    if (phase === 'synthesis_finalizing' || phase === 'finalizing') return 3;
+    if (phase === 'complete') return 4;
+    return -1;
+  };
+
+  const currentIndex = getPhaseIndex();
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+          Synthesis Progress
+        </div>
+        {leadModel && (
+          <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+            Lead: {leadModel}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        {phases.map((p, idx) => (
+          <div key={p.id} className="flex items-center">
+            <div
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all ${
+                idx < currentIndex ? 'bg-green-500 text-white' :
+                idx === currentIndex ? 'bg-blue-500 text-white animate-pulse' :
+                ''
+              }`}
+              style={idx > currentIndex ? { backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' } : {}}
+            >
+              {idx < currentIndex ? '?' : p.icon}
+            </div>
+            <span
+              className="ml-2 text-xs hidden sm:inline"
+              style={{ color: idx <= currentIndex ? 'var(--text-primary)' : 'var(--text-tertiary)' }}
+            >
+              {p.label}
+            </span>
+            {idx < phases.length - 1 && (
+              <div
+                className="w-8 h-0.5 mx-2"
+                style={{ backgroundColor: idx < currentIndex ? '#22c55e' : 'var(--border-primary)' }}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SynthesisReport({
+  result,
+  differences,
+  draft
+}: {
+  result: {
+    executiveSummary: string;
+    keyFindings: { title: string; content: string; confidence: number; contributors: string[] }[];
+    methodology: { leadModel: string; reviewers: string[] };
+    overallConfidence: number;
+  } | null;
+  differences: { topic: string; positions: { model: string; position: string; color: string }[] }[];
+  draft: string;
+}) {
+  if (!result && !draft) return null;
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 mt-6">
+      {/* Main Content */}
+      <div
+        className="rounded-2xl border p-6"
+        style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}
+      >
+        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+          Unified Synthesis
+        </h2>
+
+        {result ? (
+          <>
+            {/* Executive Summary */}
+            <div className="mb-6">
+              <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                Executive Summary
+              </h3>
+              <div
+                className="prose prose-sm max-w-none"
+                style={{ color: 'var(--text-primary)' }}
+              >
+                {result.executiveSummary.split('\n').map((p, i) => (
+                  <p key={i} className="mb-2">{p}</p>
+                ))}
+              </div>
+            </div>
+
+            {/* Key Findings */}
+            <div className="mb-6">
+              <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>
+                Key Findings
+              </h3>
+              <div className="space-y-4">
+                {result.keyFindings.map((finding, idx) => (
+                  <div
+                    key={idx}
+                    className="rounded-lg border p-4"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-primary)' }}
+                  >
+                    <h4 className="font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+                      {idx + 1}. {finding.title}
+                    </h4>
+                    <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
+                      {finding.content}
+                    </p>
+                    <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                      <span>Confidence: {finding.confidence}%</span>
+                      <span>Contributors: {finding.contributors.join(', ')}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Methodology */}
+            <div
+              className="rounded-lg p-4 text-sm"
+              style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
+            >
+              <div className="font-medium mb-2">Methodology</div>
+              <div>Lead Model: {result.methodology.leadModel}</div>
+              <div>Reviewers: {result.methodology.reviewers.join(', ')}</div>
+              <div>Overall Confidence: {result.overallConfidence}%</div>
+            </div>
+          </>
+        ) : (
+          /* Show draft while generating */
+          <div
+            className="prose prose-sm max-w-none whitespace-pre-wrap"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            {draft || 'Generating synthesis...'}
+          </div>
+        )}
+      </div>
+
+      {/* Sidebar - Points of Difference */}
+      <div
+        className="rounded-2xl border-2 p-4 h-fit lg:sticky lg:top-24"
+        style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: '#f59e0b' }}
+      >
+        <h3 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+          Points of Difference
+        </h3>
+
+        {differences.length === 0 ? (
+          <p className="text-sm" style={{ color: 'var(--text-tertiary)' }}>
+            No significant differences identified. Models reached consensus on all major points.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {differences.map((diff, idx) => (
+              <div
+                key={idx}
+                className="rounded-lg p-3 border-l-4"
+                style={{ backgroundColor: 'var(--bg-secondary)', borderLeftColor: '#f59e0b' }}
+              >
+                <h4 className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+                  {diff.topic}
+                </h4>
+                <div className="space-y-2">
+                  {diff.positions.map((pos, pidx) => (
+                    <div key={pidx} className="text-xs">
+                      <span
+                        className="inline-block px-2 py-0.5 rounded-full text-white font-medium mb-1"
+                        style={{ backgroundColor: pos.color }}
+                      >
+                        {pos.model}
+                      </span>
+                      <p style={{ color: 'var(--text-secondary)' }}>{pos.position}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [theme, setTheme] = useState<Theme>('light');
   const [question, setQuestion] = useState('');
@@ -183,6 +387,20 @@ export default function Home() {
   const [file, setFile] = useState<FileAttachment | null>(null);
   const [exporting, setExporting] = useState(false);
   const [nsfwMode, setNsfwMode] = useState(false);
+  const [synthesisMode, setSynthesisMode] = useState(false);
+  const [synthesisPhase, setSynthesisPhase] = useState<string>('');
+  const [synthesisLeadModel, setSynthesisLeadModel] = useState<string>('');
+  const [synthesisResult, setSynthesisResult] = useState<{
+    executiveSummary: string;
+    keyFindings: { title: string; content: string; confidence: number; contributors: string[] }[];
+    methodology: { leadModel: string; reviewers: string[] };
+    overallConfidence: number;
+  } | null>(null);
+  const [synthesisDifferences, setSynthesisDifferences] = useState<{
+    topic: string;
+    positions: { model: string; position: string; color: string }[];
+  }[]>([]);
+  const [synthesisDraft, setSynthesisDraft] = useState<string>('');
   const [discussion, setDiscussion] = useState({
     status: 'idle' as 'idle' | 'running' | 'complete' | 'error',
     phase: 'idle' as string,
@@ -227,12 +445,25 @@ export default function Home() {
     if (savedNsfw === 'true') {
       setNsfwMode(true);
     }
+    // Load Synthesis mode from localStorage
+    const savedSynthesis = localStorage.getItem('roundtable-synthesis-mode');
+    if (savedSynthesis === 'true') {
+      setSynthesisMode(true);
+    }
   }, []);
 
   const toggleNsfwMode = () => {
     setNsfwMode(prev => {
       const newValue = !prev;
       localStorage.setItem('roundtable-nsfw-mode', String(newValue));
+      return newValue;
+    });
+  };
+
+  const toggleSynthesisMode = () => {
+    setSynthesisMode(prev => {
+      const newValue = !prev;
+      localStorage.setItem('roundtable-synthesis-mode', String(newValue));
       return newValue;
     });
   };
@@ -690,6 +921,86 @@ export default function Home() {
         // Just a warning, don't change status
         console.warn('Voting partial failure:', data);
         break;
+
+      // Synthesis Mode Events
+      case 'synthesis_mode_started':
+        setSynthesisPhase('started');
+        setSynthesisDraft('');
+        setSynthesisResult(null);
+        setSynthesisDifferences([]);
+        break;
+
+      case 'analysis_phase_start':
+        setSynthesisPhase('analysis');
+        setDiscussion(p => ({ ...p, phase: 'synthesis_analysis' }));
+        break;
+
+      case 'analysis_complete':
+        // Individual model analysis complete
+        break;
+
+      case 'lead_model_selected':
+        setSynthesisLeadModel(data.model as string);
+        break;
+
+      case 'draft_phase_start':
+        setSynthesisPhase('drafting');
+        setDiscussion(p => ({ ...p, phase: 'synthesis_drafting' }));
+        break;
+
+      case 'draft_token':
+        setSynthesisDraft(prev => prev + (data.token as string));
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
+      case 'draft_complete':
+        setSynthesisPhase('draft_complete');
+        break;
+
+      case 'review_phase_start':
+        setSynthesisPhase('reviewing');
+        setDiscussion(p => ({ ...p, phase: 'synthesis_reviewing' }));
+        break;
+
+      case 'review_token':
+        // Could show per-reviewer progress if needed
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
+      case 'review_complete':
+        // Individual reviewer complete
+        break;
+
+      case 'finalization_start':
+        setSynthesisPhase('finalizing');
+        setSynthesisDraft(''); // Clear draft, will get final
+        setDiscussion(p => ({ ...p, phase: 'synthesis_finalizing' }));
+        break;
+
+      case 'finalization_token':
+        setSynthesisDraft(prev => prev + (data.token as string));
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
+      case 'synthesis_complete':
+        setSynthesisPhase('complete');
+        setSynthesisResult(data.report as typeof synthesisResult);
+        setSynthesisDifferences(data.differences as typeof synthesisDifferences);
+        setDiscussion(p => ({
+          ...p,
+          status: 'complete',
+          phase: 'idle',
+        }));
+        break;
+
+      case 'synthesis_error':
+        setSynthesisPhase('error');
+        setDiscussion(p => ({
+          ...p,
+          status: 'error',
+          phase: 'synthesis_error',
+        }));
+        break;
     }
   };
 
@@ -711,9 +1022,16 @@ export default function Home() {
       };
     });
 
+    // Reset synthesis state
+    setSynthesisPhase('');
+    setSynthesisLeadModel('');
+    setSynthesisResult(null);
+    setSynthesisDifferences([]);
+    setSynthesisDraft('');
+
     setDiscussion({
       status: 'running',
-      phase: 'thinking',
+      phase: synthesisMode ? 'synthesis_starting' : 'thinking',
       iteration: 1,
       modelStates: initialStates,
       votingStates: {},
@@ -746,6 +1064,7 @@ export default function Home() {
           previousDiscussion,
           file: file || undefined,
           nsfwMode,
+          synthesisMode,
         }),
         signal: abortControllerRef.current?.signal,
       });
@@ -819,8 +1138,17 @@ export default function Home() {
     const isFinalRound = iteration === 5;
     const roundLabel = isFinalRound ? `Round ${iteration} (FINAL)` : `Round ${iteration}`;
 
+    // Synthesis mode phases
+    if (phase === 'synthesis_starting') return 'Starting synthesis mode...';
+    if (phase === 'synthesis_analysis') return 'Models analyzing question...';
+    if (phase === 'synthesis_drafting') return `${synthesisLeadModel || 'Lead model'} drafting synthesis...`;
+    if (phase === 'synthesis_reviewing') return 'Peer review in progress...';
+    if (phase === 'synthesis_finalizing') return 'Finalizing synthesis...';
+    if (phase === 'synthesis_error') return 'Synthesis error';
+
+    // Discussion mode phases
     if (phase === 'thinking') return `${roundLabel}: Models thinking... (${completedCount}/${totalCount})`;
-    if (phase === 'all_complete') return `${roundLabel}: All done ✓`;
+    if (phase === 'all_complete') return `${roundLabel}: All done`;
     if (phase === 'voting') return isFinalRound ? `Final voting on consensus...` : `Models voting on consensus...`;
     if (phase === 'analyzing') return `Analyzing key points with Sonnet...`;
     if (phase === 'next_round') return `Preparing round ${iteration + 1}...`;
@@ -857,7 +1185,7 @@ export default function Home() {
               <span className="text-sm font-bold">ai</span>
             </div>
             <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>Roundtable</span>
-            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.0.5</span>
+            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.1.0</span>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center rounded-full p-1 gap-1" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
@@ -883,6 +1211,22 @@ export default function Home() {
                 <MoonIcon />
               </button>
             </div>
+            {/* Synthesis Mode Toggle */}
+            <button
+              onClick={toggleSynthesisMode}
+              disabled={discussion.status === 'running'}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${
+                discussion.status === 'running' ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'
+              }`}
+              style={{
+                backgroundColor: synthesisMode ? '#3b82f6' : 'var(--bg-tertiary)',
+                color: synthesisMode ? '#fff' : 'var(--text-secondary)',
+                borderColor: synthesisMode ? '#3b82f6' : 'var(--border-primary)',
+              }}
+              title={synthesisMode ? 'Synthesis Mode: Generate unified report' : 'Discussion Mode: Debate and vote'}
+            >
+              {synthesisMode ? '📝 Synthesis' : '💬 Discussion'}
+            </button>
             {/* NSFW Toggle */}
             <button
               onClick={toggleNsfwMode}
@@ -1127,23 +1471,37 @@ export default function Home() {
             className="mb-6 p-4 rounded-xl border"
             style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}
           >
-            <div className="flex items-center gap-3 mb-3">
-              <div
-                className={`w-3 h-3 rounded-full animate-pulse ${discussion.phase === 'voting' ? 'bg-purple-500' : 'bg-blue-500'}`}
-              />
-              <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{getPhaseText()}</span>
-            </div>
-            <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-              <div
-                className="h-full rounded-full transition-all"
-                style={{
-                  width: discussion.phase === 'voting' || discussion.phase === 'all_complete'
-                    ? '100%'
-                    : `${(discussion.completedCount / discussion.totalCount) * 100}%`,
-                  backgroundColor: discussion.phase === 'voting' ? '#8b5cf6' : 'var(--accent)',
-                }}
-              />
-            </div>
+            {/* Synthesis Mode Progress */}
+            {synthesisMode && discussion.phase.startsWith('synthesis') ? (
+              <>
+                <SynthesisProgress phase={synthesisPhase || discussion.phase} leadModel={synthesisLeadModel} />
+                <div className="flex items-center gap-3">
+                  <div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse" />
+                  <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{getPhaseText()}</span>
+                </div>
+              </>
+            ) : (
+              /* Discussion Mode Progress */
+              <>
+                <div className="flex items-center gap-3 mb-3">
+                  <div
+                    className={`w-3 h-3 rounded-full animate-pulse ${discussion.phase === 'voting' ? 'bg-purple-500' : 'bg-blue-500'}`}
+                  />
+                  <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{getPhaseText()}</span>
+                </div>
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{
+                      width: discussion.phase === 'voting' || discussion.phase === 'all_complete'
+                        ? '100%'
+                        : `${(discussion.completedCount / discussion.totalCount) * 100}%`,
+                      backgroundColor: discussion.phase === 'voting' ? '#8b5cf6' : 'var(--accent)',
+                    }}
+                  />
+                </div>
+              </>
+            )}
 
             {/* Stuck detection warning */}
             {discussion.isStuck && (
@@ -1234,7 +1592,27 @@ export default function Home() {
         )}
 
         {/* Model columns */}
-        {discussion.status !== 'idle' && (
+        {/* Synthesis Draft Preview during generation */}
+        {discussion.status === 'running' && synthesisMode && synthesisDraft && (
+          <div
+            className="mb-6 p-6 rounded-xl border"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}
+          >
+            <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>
+              {synthesisPhase === 'drafting' || synthesisPhase === 'synthesis_drafting' ? 'Draft Preview' : 'Final Synthesis'}
+            </h3>
+            <div
+              className="prose prose-sm max-w-none whitespace-pre-wrap"
+              style={{ color: 'var(--text-primary)' }}
+            >
+              {synthesisDraft}
+              <span className="animate-pulse">|</span>
+            </div>
+          </div>
+        )}
+
+        {/* Model responses grid (Discussion mode or Synthesis analysis phase) */}
+        {discussion.status !== 'idle' && !synthesisMode && (
           <div
             className="grid gap-4 mb-8"
             style={{ gridTemplateColumns: `repeat(${Object.keys(discussion.modelStates).length}, minmax(280px, 1fr))` }}
@@ -1319,7 +1697,19 @@ export default function Home() {
         )}
 
         {/* Consensus result */}
-        {discussion.status === 'complete' && discussion.consensusResult && (
+        {/* Synthesis Mode Result */}
+        {discussion.status === 'complete' && synthesisMode && (synthesisResult || synthesisDraft) && (
+          <div ref={consensusRef}>
+            <SynthesisReport
+              result={synthesisResult}
+              differences={synthesisDifferences}
+              draft={synthesisDraft}
+            />
+          </div>
+        )}
+
+        {/* Discussion Mode Result */}
+        {discussion.status === 'complete' && !synthesisMode && discussion.consensusResult && (
           <div
             ref={consensusRef}
             className="rounded-2xl border p-8 shadow-sm"
