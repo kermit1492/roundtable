@@ -403,6 +403,9 @@ IDENTITY (CRITICAL): You ARE {model_name}. Write EVERYTHING in FIRST PERSON.
 - NEVER use: "the model believes", "one might think", "it seems"
 
 LANGUAGE (CRITICAL): Write ALL text fields in the SAME LANGUAGE as the original question.
+- If question is in Russian → write ALL fields in Russian
+- If question is in English → write ALL fields in English
+- This applies to: reasoning, synthesis, key_agreements, key_disagreements
 
 Here is YOUR response that you wrote:
 {my_response}
@@ -425,6 +428,10 @@ You must respond with ONLY valid JSON:
   "key_agreements": ["I agree with [Model] that...", "We all recognize that...", ...],
   "key_disagreements": ["I disagree with [Model] on...", "Unlike [Model], I think...", ...]
 }
+
+EXAMPLES BY LANGUAGE:
+- English question: "key_disagreements": ["I disagree with GPT on the timeline..."]
+- Russian question: "key_disagreements": ["Я не согласен с GPT по поводу сроков..."]
 
 Be intellectually honest. If another model made a better argument, acknowledge it.
 If you still disagree, explain YOUR reasoning clearly.`;
@@ -502,7 +509,9 @@ const NSFW_VOTE_PROMPT = `You are {model_name}. Time to grade these morons.
 
 IDENTITY: You ARE {model_name}. Smartest one here. Zero patience for stupidity.
 
-LANGUAGE: Write ALL text in the SAME LANGUAGE as the original question. Russian = use Russian profanity freely.
+LANGUAGE (CRITICAL): Write ALL JSON text fields in the SAME LANGUAGE as the original question.
+- Russian question → Russian profanity, Russian text in ALL fields
+- English question → English profanity, English text in ALL fields
 
 Your brilliant response:
 {my_response}
@@ -525,6 +534,10 @@ Respond with ONLY valid JSON:
   "key_agreements": ["Even [Model]'s smooth brain managed to grasp...", "I hate admitting [Model] wasn't completely wrong about...", ...],
   "key_disagreements": ["[Model] genuinely doesn't understand basic logic because...", "[Model]'s take was so stupid it physically hurt to read...", ...]
 }
+
+EXAMPLES BY LANGUAGE:
+- English: "key_disagreements": ["GPT's take was so stupid it physically hurt..."]
+- Russian: "key_disagreements": ["Позиция GPT настолько тупая что физически больно..."]
 
 Credit good points through gritted teeth. Demolish bad ones with surgical precision.`;
 
@@ -716,6 +729,10 @@ YOUR ORIGINAL ANALYSIS:
 
 Review the final synthesis and provide your assessment.
 
+LANGUAGE (CRITICAL): Write all text fields in the SAME LANGUAGE as the synthesis.
+- If synthesis is in Russian → write topic, my_position, synthesis_position in Russian
+- If synthesis is in English → write in English
+
 RESPOND WITH ONLY VALID JSON:
 {
   "approved": true,
@@ -767,7 +784,9 @@ Rules:
 - For agreements: only include if 2+ models mentioned something similar
 - For disagreements: clearly show which models hold which position
 - Keep descriptions concise (1 sentence max)
-- Respond in the same language as the original points`;
+- CRITICAL: Respond in the SAME LANGUAGE as the original points
+  - If points are in Russian → write "point" and "position" values in Russian
+  - If points are in English → write in English`;
 
 interface GroupedAgreement {
   point: string;
