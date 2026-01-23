@@ -1325,7 +1325,7 @@ export default function Home() {
               <span className="text-sm font-bold">ai</span>
             </div>
             <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>Roundtable</span>
-            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.2.0</span>
+            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.2.1</span>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center rounded-full p-1 gap-1" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
