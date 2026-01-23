@@ -262,10 +262,11 @@ async function streamModel(
   modelId: string,
   messages: { role: string; content: string | object }[],
   onToken: (token: string) => void,
-  maxTokens: number = MAX_RESPONSE_TOKENS
+  maxTokens: number = MAX_RESPONSE_TOKENS,
+  timeoutMs: number = 90000 // Default 90 seconds, can be increased for synthesis
 ): Promise<string> {
   const actualModelId = getActualModelId(modelId);
-  const STREAM_TIMEOUT_MS = 90000; // 90 seconds max per model (optimized for Vercel)
+  const STREAM_TIMEOUT_MS = timeoutMs;
   
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
@@ -556,9 +557,9 @@ FORMAT your response EXACTLY as:
 Question to analyze:
 {question}`;
 
-const SYNTHESIS_DRAFT_PROMPT = `You are {model_name}, selected as LEAD SYNTHESIZER for this collaborative report.
+const SYNTHESIS_DRAFT_PROMPT = `You are {model_name}, creating your own comprehensive synthesis of the collaborative analysis.
 
-Create a comprehensive synthesis incorporating insights from ALL participating AI models.
+ALL participating AI models will write their own synthesis drafts. Your draft will be reviewed and compared with others.
 
 INPUTS:
 - Original question: {question}
@@ -576,6 +577,7 @@ REQUIREMENTS:
 4. Aim for 800-1200 words total
 5. Write in authoritative, report-like tone
 6. Use the SAME LANGUAGE as the original question
+7. BE ORIGINAL: Present your unique perspective and synthesis approach
 
 FORMAT your response EXACTLY as:
 ## Executive Summary
@@ -598,11 +600,11 @@ FORMAT your response EXACTLY as:
 ## Areas of Uncertainty
 [Any points where there's genuine uncertainty or the models offered different perspectives]
 
-REMEMBER: This will be reviewed by other models. Be thorough and incorporate their best insights.`;
+REMEMBER: Other models will also write drafts, and everyone will cross-review. Make your synthesis the best it can be!`;
 
-const SYNTHESIS_REVIEW_PROMPT = `You are {model_name}, reviewing the draft synthesis created by {lead_model}.
+const SYNTHESIS_REVIEW_PROMPT = `You are {model_name}, reviewing the draft synthesis created by {draft_author}.
 
-Your role is to CRITICALLY EVALUATE and IMPROVE the synthesis. Be constructive but thorough.
+Your role is to CRITICALLY EVALUATE and provide constructive feedback. Be thorough but fair.
 
 DRAFT TO REVIEW:
 {draft}
@@ -610,44 +612,86 @@ DRAFT TO REVIEW:
 YOUR ORIGINAL ANALYSIS:
 {my_analysis}
 
+YOUR OWN DRAFT (for comparison):
+{my_draft}
+
 DOUBLE-CHECK EVERYTHING:
 - Verify any specific claims against your knowledge
 - Check for logical consistency throughout
-- Ensure nothing important from your analysis is missing
+- Compare with your own draft - what did they do better or worse?
 - Flag anything that seems overstated or understated
-- Question assumptions made by the lead model
+- Question assumptions made by the draft author
 
 RESPOND with this EXACT format:
 ## Accuracy Issues
 [List any factual errors or misrepresentations that need correction, or write "None identified"]
 
-## Missing Content
-[What important points from your analysis should be added]
+## Strengths
+[What this draft does well compared to your own approach]
 
-## Clarity Improvements
-[Specific suggestions for clearer wording or better structure]
+## Weaknesses
+[What this draft does worse or is missing]
+
+## Missing Content
+[What important points should be added]
 
 ## Points of Difference
-[If you disagree with any conclusions, explain your alternative view and reasoning]
+[If you disagree with any conclusions, explain your alternative view]
 
-## Assessment
-[One of: "Approve" / "Approve with changes" / "Major revisions needed"]
+## Rating
+[Rate this draft: 1-10 where 10 is excellent]
 
-Be specific and constructive. Your feedback will be incorporated into the final synthesis.`;
+Be specific and constructive. Your feedback will be used in voting.`;
 
-const SYNTHESIS_FINALIZE_PROMPT = `You are {model_name}, finalizing the synthesis by incorporating peer feedback.
+const SYNTHESIS_VOTE_PROMPT = `You are {model_name}, voting on which draft synthesis is best.
 
-ORIGINAL DRAFT:
+ALL DRAFTS TO COMPARE:
+{all_drafts}
+
+REVIEWS YOU PROVIDED:
+{my_reviews}
+
+YOUR ORIGINAL ANALYSIS:
+{my_analysis}
+
+VOTE for the BEST draft synthesis. Consider:
+1. Accuracy and factual correctness
+2. Comprehensiveness - does it cover all key points?
+3. Clarity and structure
+4. Incorporation of all models' insights
+5. Overall quality of reasoning
+
+RESPOND WITH ONLY VALID JSON:
+{
+  "best_draft": "Model Name",
+  "ranking": ["1st Model", "2nd Model", "3rd Model"],
+  "reasoning": "Why I chose this draft as best...",
+  "improvements_for_winner": ["Suggestion 1", "Suggestion 2"],
+  "key_strengths": "What makes the winning draft excellent",
+  "confidence": 0.85
+}
+
+Be objective. If your own draft isn't the best, admit it. Vote for quality, not yourself.`;
+
+const SYNTHESIS_FINALIZE_PROMPT = `You are {model_name}, selected by voting as author of the WINNING draft. Finalize it with peer feedback.
+
+YOUR WINNING DRAFT:
 {draft}
 
-REVIEWS FROM OTHER MODELS:
+VOTING RESULTS AND FEEDBACK:
+{voting_feedback}
+
+REVIEWS OF YOUR DRAFT:
 {reviews}
 
+IMPROVEMENTS SUGGESTED BY VOTERS:
+{improvements}
+
 YOUR TASK:
-1. Address all valid accuracy issues raised by reviewers
-2. Incorporate valuable missing content they identified
-3. Improve clarity where suggested
-4. Where reviews conflict with each other, use your best judgment
+1. Address the improvements suggested by voters
+2. Fix any accuracy issues raised in reviews
+3. Incorporate valuable missing content they identified
+4. Strengthen the areas where your draft was praised
 5. Maintain the authoritative, comprehensive tone
 6. Keep the same language as the original question
 
@@ -811,7 +855,8 @@ async function handleSynthesisMode(
 
   send('synthesis_mode_started', { question, models: models.map(m => getModelName(m)) });
 
-  // Phase 1: Initial Analysis - all models analyze in parallel
+  // ==================== PHASE 1: Initial Analysis ====================
+  // All models analyze the question in parallel
   send('analysis_phase_start', { models: models.map(m => getModelName(m)) });
 
   const analyses: { modelId: string; modelName: string; content: string }[] = [];
@@ -832,8 +877,10 @@ async function handleSynthesisMode(
         ],
         (token) => {
           fullResponse += token;
-          send('model_token', { model: modelId, token });
-        }
+          send('model_token', { model: modelId, token, phase: 'analysis' });
+        },
+        MAX_RESPONSE_TOKENS,
+        180000 // 3 minutes timeout for synthesis analysis
       );
 
       send('analysis_complete', { model: modelName, wordCount: fullResponse.split(/\s+/).length });
@@ -846,124 +893,300 @@ async function handleSynthesisMode(
   });
 
   const analysisResults = await Promise.all(analysisPromises);
+
+  // Log analysis results for debugging
+  console.log('[Synthesis] Analysis results:');
+  for (const a of analysisResults) {
+    const isError = a.content.startsWith('Error:');
+    console.log(`  - ${a.modelName}: ${isError ? '✗ FAILED - ' + a.content.slice(0, 100) : '✓ ' + a.content.length + ' chars'}`);
+  }
+
   analyses.push(...analysisResults.filter(a => !a.content.startsWith('Error:')));
+  console.log(`[Synthesis] ${analyses.length} analyses included: ${analyses.map(a => a.modelName).join(', ')}`);
 
   if (analyses.length < 2) {
     send('synthesis_error', { error: 'Not enough models completed analysis', phase: 'analysis' });
     return;
   }
 
-  // Select lead model based on analysis quality
-  const leadModel = selectLeadModel(analyses);
-  send('lead_model_selected', {
-    model: leadModel.modelName,
-    reason: 'Most comprehensive initial analysis'
-  });
-
-  // Phase 2: Draft Synthesis
-  send('draft_phase_start', { leadModel: leadModel.modelName });
+  // ==================== PHASE 2: ALL Models Write Drafts ====================
+  // Every model writes their own draft synthesis
+  send('draft_phase_start', { models: analyses.map(a => a.modelName) });
 
   const analysesText = analyses
     .map(a => `### ${a.modelName}\n${a.content}`)
     .join('\n\n---\n\n');
 
-  const draftPrompt = SYNTHESIS_DRAFT_PROMPT
-    .replace('{model_name}', leadModel.modelName)
-    .replace('{question}', question)
-    .replace('{analyses}', analysesText);
+  const drafts: { modelId: string; modelName: string; draft: string }[] = [];
 
-  let draft = '';
-  try {
-    await streamModel(
-      leadModel.modelId,
-      [
-        { role: 'system', content: draftPrompt },
-        { role: 'user', content: 'Create the comprehensive synthesis based on all analyses.' }
-      ],
-      (token) => {
-        draft += token;
-        send('draft_token', { token });
-      },
-      12000 // More tokens for comprehensive draft
-    );
-    send('draft_complete', { preview: draft.slice(0, 300) + '...' });
-  } catch (error) {
-    console.error(`[${leadModel.modelName}] Draft failed:`, error);
-    send('synthesis_error', { error: String(error), phase: 'drafting' });
-    return;
-  }
+  const draftPromises = analyses.map(async (analysis) => {
+    const draftPrompt = SYNTHESIS_DRAFT_PROMPT
+      .replace('{model_name}', analysis.modelName)
+      .replace('{question}', question)
+      .replace('{analyses}', analysesText);
 
-  // Phase 3: Peer Review - other models review in parallel
-  const reviewers = analyses.filter(a => a.modelId !== leadModel.modelId);
-  send('review_phase_start', { reviewers: reviewers.map(r => r.modelName) });
-
-  const reviews: { modelId: string; modelName: string; review: string }[] = [];
-
-  const reviewPromises = reviewers.map(async (reviewer) => {
-    const reviewPrompt = SYNTHESIS_REVIEW_PROMPT
-      .replace('{model_name}', reviewer.modelName)
-      .replace('{lead_model}', leadModel.modelName)
-      .replace('{draft}', draft)
-      .replace('{my_analysis}', reviewer.content);
-
-    let review = '';
+    let draft = '';
     try {
       await streamModel(
-        reviewer.modelId,
+        analysis.modelId,
         [
-          { role: 'system', content: reviewPrompt },
-          { role: 'user', content: 'Review the draft synthesis and provide your feedback.' }
+          { role: 'system', content: draftPrompt },
+          { role: 'user', content: 'Create your comprehensive synthesis based on all analyses.' }
         ],
         (token) => {
-          review += token;
-          send('review_token', { model: reviewer.modelId, token });
+          draft += token;
+          send('draft_token', { model: analysis.modelId, token });
         },
-        4000
+        10000, // Tokens for comprehensive draft
+        180000 // 3 minutes timeout for synthesis drafts
       );
-      send('review_complete', { model: reviewer.modelName });
-      return { modelId: reviewer.modelId, modelName: reviewer.modelName, review };
+      send('draft_complete', { model: analysis.modelName, wordCount: draft.split(/\s+/).length });
+      return { modelId: analysis.modelId, modelName: analysis.modelName, draft };
     } catch (error) {
-      console.error(`[${reviewer.modelName}] Review failed:`, error);
-      return { modelId: reviewer.modelId, modelName: reviewer.modelName, review: 'Review failed' };
+      console.error(`[${analysis.modelName}] Draft failed:`, error);
+      send('draft_complete', { model: analysis.modelName, error: String(error) });
+      return { modelId: analysis.modelId, modelName: analysis.modelName, draft: '' };
     }
   });
 
+  const draftResults = await Promise.all(draftPromises);
+
+  // Log draft results for debugging
+  console.log('[Synthesis] Draft results:');
+  for (const d of draftResults) {
+    console.log(`  - ${d.modelName}: ${d.draft.length} chars ${d.draft.length > 100 ? '✓' : '✗ (too short, excluded)'}`);
+  }
+
+  drafts.push(...draftResults.filter(d => d.draft.length > 100));
+  console.log(`[Synthesis] ${drafts.length} drafts included: ${drafts.map(d => d.modelName).join(', ')}`);
+
+  if (drafts.length < 2) {
+    send('synthesis_error', { error: 'Not enough models completed drafts', phase: 'drafting' });
+    return;
+  }
+
+  // ==================== PHASE 3: Cross-Review ====================
+  // Each model reviews ALL other models' drafts
+  send('review_phase_start', { reviewers: drafts.map(d => d.modelName) });
+
+  const allReviews: { reviewerId: string; reviewerName: string; targetId: string; targetName: string; review: string; rating: number }[] = [];
+
+  // Each model reviews all OTHER drafts
+  const reviewPromises: Promise<{ reviewerId: string; reviewerName: string; targetId: string; targetName: string; review: string; rating: number }>[] = [];
+
+  for (const reviewer of drafts) {
+    const myAnalysis = analyses.find(a => a.modelId === reviewer.modelId)?.content || '';
+
+    for (const target of drafts) {
+      if (target.modelId === reviewer.modelId) continue; // Don't review your own draft
+
+      const reviewPromise = (async () => {
+        const reviewPrompt = SYNTHESIS_REVIEW_PROMPT
+          .replace('{model_name}', reviewer.modelName)
+          .replace('{draft_author}', target.modelName)
+          .replace('{draft}', target.draft)
+          .replace('{my_analysis}', myAnalysis)
+          .replace('{my_draft}', reviewer.draft);
+
+        let review = '';
+        try {
+          await streamModel(
+            reviewer.modelId,
+            [
+              { role: 'system', content: reviewPrompt },
+              { role: 'user', content: `Review ${target.modelName}'s draft synthesis.` }
+            ],
+            (token) => {
+              review += token;
+              send('review_token', { reviewer: reviewer.modelId, target: target.modelId, token });
+            },
+            3000,
+            120000 // 2 minutes timeout for reviews
+          );
+
+          // Extract rating from review
+          const ratingMatch = review.match(/Rating[:\s]*(\d+)/i);
+          const rating = ratingMatch ? parseInt(ratingMatch[1]) : 5;
+
+          send('review_complete', { reviewer: reviewer.modelName, target: target.modelName, rating });
+          return { reviewerId: reviewer.modelId, reviewerName: reviewer.modelName, targetId: target.modelId, targetName: target.modelName, review, rating };
+        } catch (error) {
+          console.error(`[${reviewer.modelName}] Review of ${target.modelName} failed:`, error);
+          return { reviewerId: reviewer.modelId, reviewerName: reviewer.modelName, targetId: target.modelId, targetName: target.modelName, review: 'Review failed', rating: 5 };
+        }
+      })();
+
+      reviewPromises.push(reviewPromise);
+    }
+  }
+
   const reviewResults = await Promise.all(reviewPromises);
-  reviews.push(...reviewResults);
+  allReviews.push(...reviewResults);
 
-  // Phase 4: Finalization
-  send('finalization_start', {});
+  // ==================== PHASE 4: Voting ====================
+  // Each model votes for the best draft (not their own)
+  send('voting_phase_start', { voters: drafts.map(d => d.modelName) });
 
-  const reviewsText = reviews
-    .map(r => `### Review by ${r.modelName}\n${r.review}`)
+  interface SynthesisVote {
+    voterId: string;
+    voterName: string;
+    bestDraft: string;
+    ranking: string[];
+    reasoning: string;
+    improvements: string[];
+    confidence: number;
+  }
+
+  const votes: SynthesisVote[] = [];
+
+  // Format all drafts for comparison
+  const allDraftsText = drafts
+    .map(d => `### ${d.modelName}'s Draft\n${d.draft}`)
+    .join('\n\n========================================\n\n');
+
+  const votePromises = drafts.map(async (voter) => {
+    const myAnalysis = analyses.find(a => a.modelId === voter.modelId)?.content || '';
+    const myReviews = allReviews
+      .filter(r => r.reviewerId === voter.modelId)
+      .map(r => `Review of ${r.targetName}: Rating ${r.rating}/10\n${r.review}`)
+      .join('\n\n---\n\n');
+
+    const votePrompt = SYNTHESIS_VOTE_PROMPT
+      .replace('{model_name}', voter.modelName)
+      .replace('{all_drafts}', allDraftsText)
+      .replace('{my_reviews}', myReviews)
+      .replace('{my_analysis}', myAnalysis);
+
+    try {
+      const response = await callModel(
+        voter.modelId,
+        [
+          { role: 'system', content: votePrompt },
+          { role: 'user', content: 'Vote for the best draft synthesis. You may vote for your own if you genuinely believe it is best.' }
+        ],
+        2000,
+        0.3
+      );
+
+      // Parse JSON response
+      const jsonMatch = response.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(sanitizeJsonString(jsonMatch[0]));
+        const vote: SynthesisVote = {
+          voterId: voter.modelId,
+          voterName: voter.modelName,
+          bestDraft: parsed.best_draft || drafts[0].modelName,
+          ranking: parsed.ranking || [],
+          reasoning: parsed.reasoning || '',
+          improvements: parsed.improvements_for_winner || [],
+          confidence: parsed.confidence || 0.7
+        };
+        send('vote_cast', { voter: voter.modelName, votedFor: vote.bestDraft });
+        return vote;
+      }
+    } catch (error) {
+      console.error(`[${voter.modelName}] Vote failed:`, error);
+    }
+
+    // Default vote if parsing fails - vote for first other model
+    const defaultVote = drafts.find(d => d.modelId !== voter.modelId)?.modelName || drafts[0].modelName;
+    send('vote_cast', { voter: voter.modelName, votedFor: defaultVote });
+    return {
+      voterId: voter.modelId,
+      voterName: voter.modelName,
+      bestDraft: defaultVote,
+      ranking: [],
+      reasoning: 'Vote parsing failed',
+      improvements: [],
+      confidence: 0.5
+    };
+  });
+
+  const voteResults = await Promise.all(votePromises);
+  votes.push(...voteResults);
+
+  // Tally votes
+  const voteCounts: Record<string, number> = {};
+  for (const vote of votes) {
+    voteCounts[vote.bestDraft] = (voteCounts[vote.bestDraft] || 0) + 1;
+  }
+
+  // Find winner (most votes, or highest average rating as tiebreaker)
+  let winnerName = '';
+  let maxVotes = 0;
+  for (const [name, count] of Object.entries(voteCounts)) {
+    if (count > maxVotes) {
+      maxVotes = count;
+      winnerName = name;
+    } else if (count === maxVotes) {
+      // Tiebreaker: average rating from reviews
+      const currentAvg = allReviews.filter(r => r.targetName === name).reduce((sum, r) => sum + r.rating, 0) /
+                        (allReviews.filter(r => r.targetName === name).length || 1);
+      const winnerAvg = allReviews.filter(r => r.targetName === winnerName).reduce((sum, r) => sum + r.rating, 0) /
+                       (allReviews.filter(r => r.targetName === winnerName).length || 1);
+      if (currentAvg > winnerAvg) {
+        winnerName = name;
+      }
+    }
+  }
+
+  const winner = drafts.find(d => d.modelName === winnerName) || drafts[0];
+  send('voting_complete', {
+    winner: winner.modelName,
+    votes: voteCounts,
+    totalVotes: votes.length
+  });
+
+  // ==================== PHASE 5: Finalization ====================
+  // Winner incorporates feedback and finalizes
+  send('finalization_start', { finalizer: winner.modelName });
+
+  // Gather all improvements suggested for winner
+  const allImprovements = votes
+    .filter(v => v.bestDraft === winner.modelName)
+    .flatMap(v => v.improvements)
+    .filter(i => i && i.length > 0);
+
+  // Gather reviews of winner's draft
+  const winnerReviews = allReviews
+    .filter(r => r.targetId === winner.modelId)
+    .map(r => `### Review by ${r.reviewerName} (Rating: ${r.rating}/10)\n${r.review}`)
     .join('\n\n---\n\n');
 
+  // Format voting feedback
+  const votingFeedback = votes
+    .map(v => `${v.voterName} voted for ${v.bestDraft}: ${v.reasoning}`)
+    .join('\n');
+
   const finalizePrompt = SYNTHESIS_FINALIZE_PROMPT
-    .replace('{model_name}', leadModel.modelName)
-    .replace('{draft}', draft)
-    .replace('{reviews}', reviewsText);
+    .replace('{model_name}', winner.modelName)
+    .replace('{draft}', winner.draft)
+    .replace('{voting_feedback}', votingFeedback)
+    .replace('{reviews}', winnerReviews)
+    .replace('{improvements}', allImprovements.join('\n- ') || 'No specific improvements suggested');
 
   let finalSynthesis = '';
   try {
     await streamModel(
-      leadModel.modelId,
+      winner.modelId,
       [
         { role: 'system', content: finalizePrompt },
-        { role: 'user', content: 'Incorporate the feedback and produce the final synthesis.' }
+        { role: 'user', content: 'You won the vote! Incorporate the feedback and produce the final synthesis.' }
       ],
       (token) => {
         finalSynthesis += token;
         send('finalization_token', { token });
       },
-      12000
+      12000,
+      180000 // 3 minutes timeout for finalization
     );
   } catch (error) {
-    console.error(`[${leadModel.modelName}] Finalization failed:`, error);
-    // Fall back to draft if finalization fails
-    finalSynthesis = draft;
+    console.error(`[${winner.modelName}] Finalization failed:`, error);
+    // Fall back to winner's original draft
+    finalSynthesis = winner.draft;
   }
 
-  // Phase 5: Sign-off and collect differences
+  // ==================== PHASE 6: Sign-off and Collect Differences ====================
   const signoffs: { modelId: string; modelName: string; signoff: { approved: boolean; confidence: number; remaining_differences: { topic: string; my_position: string; synthesis_position: string; importance: string }[] } }[] = [];
 
   const signoffPromises = analyses.map(async (analysis) => {
@@ -1010,39 +1233,71 @@ async function handleSynthesisMode(
   const signoffResults = await Promise.all(signoffPromises);
   signoffs.push(...signoffResults);
 
-  // Extract and format differences
+  // Extract and format differences - collect all positions on each topic
   const differences: PointOfDifference[] = [];
-  const seenTopics = new Set<string>();
+  const topicData: Map<string, {
+    synthPos: string;
+    modelPositions: { model: string; position: string; modelId: string }[]
+  }> = new Map();
 
+  // First pass: collect all topics and positions
   for (const signoff of signoffs) {
     for (const diff of signoff.signoff.remaining_differences) {
-      if (!seenTopics.has(diff.topic)) {
-        seenTopics.add(diff.topic);
-        differences.push({
-          topic: diff.topic,
-          positions: [{
-            model: signoff.modelName,
-            position: diff.my_position,
-            color: MODEL_COLORS[signoff.modelId] || '#666'
-          }]
+      if (!topicData.has(diff.topic)) {
+        topicData.set(diff.topic, {
+          synthPos: diff.synthesis_position,
+          modelPositions: []
         });
-      } else {
-        const existing = differences.find(d => d.topic === diff.topic);
-        if (existing) {
-          existing.positions.push({
-            model: signoff.modelName,
-            position: diff.my_position,
-            color: MODEL_COLORS[signoff.modelId] || '#666'
-          });
-        }
+      }
+      const data = topicData.get(diff.topic)!;
+      // Add this model's position if they disagree
+      if (!data.modelPositions.find(p => p.model === signoff.modelName)) {
+        data.modelPositions.push({
+          model: signoff.modelName,
+          position: diff.my_position,
+          modelId: signoff.modelId
+        });
       }
     }
   }
 
-  // Build final report
-  const report = parseSynthesisReport(finalSynthesis, leadModel.modelName, reviewers.map(r => r.modelName), signoffs);
+  // Second pass: build differences with synthesis position included
+  for (const [topic, data] of topicData) {
+    const positions: PointOfDifference['positions'] = [];
 
-  send('synthesis_complete', { report, differences });
+    // Add synthesis position first (from winner)
+    positions.push({
+      model: `📝 Synthesis (${winner.modelName})`,
+      position: data.synthPos,
+      color: MODEL_COLORS[winner.modelId] || '#3b82f6'
+    });
+
+    // Add each disagreeing model's position
+    for (const mp of data.modelPositions) {
+      positions.push({
+        model: mp.model,
+        position: mp.position,
+        color: MODEL_COLORS[mp.modelId] || '#666'
+      });
+    }
+
+    differences.push({ topic, positions });
+  }
+
+  // Build final report
+  const report = parseSynthesisReport(finalSynthesis, winner.modelName, drafts.filter(d => d.modelId !== winner.modelId).map(d => d.modelName), signoffs);
+
+  // Add voting metadata to report
+  const reportWithVoting = {
+    ...report,
+    votingResults: {
+      winner: winner.modelName,
+      votes: voteCounts,
+      totalVotes: votes.length
+    }
+  };
+
+  send('synthesis_complete', { report: reportWithVoting, differences });
 }
 
 function selectLeadModel(analyses: { modelId: string; modelName: string; content: string }[]): { modelId: string; modelName: string } {
@@ -1068,6 +1323,9 @@ function parseSynthesisReport(
   reviewers: string[],
   signoffs: { signoff: { confidence: number } }[]
 ): SynthesisResult {
+  // All participating models (winner + all other drafters)
+  const allModels = [leadModel, ...reviewers];
+
   // Extract executive summary
   const summaryMatch = synthesis.match(/## Executive Summary\s*([\s\S]*?)(?=## Key Findings|## Finding|$)/i);
   const executiveSummary = summaryMatch ? summaryMatch[1].trim() : synthesis.slice(0, 500);
@@ -1082,17 +1340,14 @@ function parseSynthesisReport(
       const title = match[1].trim();
       const content = match[2].trim();
 
-      // Extract confidence and contributors
+      // Extract confidence (ignore model's contributors - always use ALL participating models)
       const confidenceMatch = content.match(/Confidence:\s*(\d+)%/i);
-      const contributorsMatch = content.match(/Contributors?:\s*([^\n*]+)/i);
 
       keyFindings.push({
         title,
-        content: content.replace(/\*Confidence.*$/gm, '').trim(),
+        content: content.replace(/\*Confidence.*$/gm, '').replace(/\*?Contributors?:.*$/gmi, '').trim(),
         confidence: confidenceMatch ? parseInt(confidenceMatch[1]) : 75,
-        contributors: contributorsMatch
-          ? contributorsMatch[1].split(',').map(c => c.trim())
-          : [leadModel]
+        contributors: allModels  // Always use all participating models
       });
     }
   }
@@ -1108,7 +1363,7 @@ function parseSynthesisReport(
       title: 'Main Finding',
       content: executiveSummary,
       confidence: 75,
-      contributors: [leadModel]
+      contributors: allModels
     }],
     methodology: {
       leadModel,

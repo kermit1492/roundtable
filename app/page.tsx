@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, type ReportData, type ModelResponse } from './components/PDFReport';
+import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, generateSynthesisDOCX, type ReportData, type ModelResponse, type SynthesisReportData } from './components/PDFReport';
 
 const AVAILABLE_MODELS = [
   // Flagship tier
@@ -175,21 +175,23 @@ function DownloadIcon() {
 }
 
 // Synthesis Mode Components
-function SynthesisProgress({ phase, leadModel }: { phase: string; leadModel: string }) {
+function SynthesisProgress({ phase, winnerModel }: { phase: string; winnerModel: string }) {
   const phases = [
     { id: 'analysis', label: 'Analysis', icon: '1' },
-    { id: 'drafting', label: 'Drafting', icon: '2' },
-    { id: 'reviewing', label: 'Review', icon: '3' },
-    { id: 'finalizing', label: 'Finalizing', icon: '4' },
-    { id: 'complete', label: 'Complete', icon: '5' },
+    { id: 'drafting', label: 'All Draft', icon: '2' },
+    { id: 'reviewing', label: 'Cross-Review', icon: '3' },
+    { id: 'voting', label: 'Voting', icon: '4' },
+    { id: 'finalizing', label: 'Finalize', icon: '5' },
+    { id: 'complete', label: 'Done', icon: '✓' },
   ];
 
   const getPhaseIndex = () => {
     if (phase === 'synthesis_analysis' || phase === 'analysis') return 0;
     if (phase === 'synthesis_drafting' || phase === 'drafting' || phase === 'draft_complete') return 1;
     if (phase === 'synthesis_reviewing' || phase === 'reviewing') return 2;
-    if (phase === 'synthesis_finalizing' || phase === 'finalizing') return 3;
-    if (phase === 'complete') return 4;
+    if (phase === 'synthesis_voting' || phase === 'voting') return 3;
+    if (phase === 'synthesis_finalizing' || phase === 'finalizing') return 4;
+    if (phase === 'complete') return 5;
     return -1;
   };
 
@@ -201,34 +203,34 @@ function SynthesisProgress({ phase, leadModel }: { phase: string; leadModel: str
         <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
           Synthesis Progress
         </div>
-        {leadModel && (
+        {winnerModel && (
           <div className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-            Lead: {leadModel}
+            🏆 Winner: {winnerModel}
           </div>
         )}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
         {phases.map((p, idx) => (
           <div key={p.id} className="flex items-center">
             <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all ${
+              className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-all ${
                 idx < currentIndex ? 'bg-green-500 text-white' :
                 idx === currentIndex ? 'bg-blue-500 text-white animate-pulse' :
                 ''
               }`}
               style={idx > currentIndex ? { backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' } : {}}
             >
-              {idx < currentIndex ? '?' : p.icon}
+              {idx < currentIndex ? '✓' : p.icon}
             </div>
             <span
-              className="ml-2 text-xs hidden sm:inline"
+              className="ml-1 text-xs hidden md:inline"
               style={{ color: idx <= currentIndex ? 'var(--text-primary)' : 'var(--text-tertiary)' }}
             >
               {p.label}
             </span>
             {idx < phases.length - 1 && (
               <div
-                className="w-8 h-0.5 mx-2"
+                className="w-4 h-0.5 mx-1"
                 style={{ backgroundColor: idx < currentIndex ? '#22c55e' : 'var(--border-primary)' }}
               />
             )}
@@ -242,16 +244,25 @@ function SynthesisProgress({ phase, leadModel }: { phase: string; leadModel: str
 function SynthesisReport({
   result,
   differences,
-  draft
+  draft,
+  question,
+  selectedModels,
+  exporting,
+  onExport
 }: {
   result: {
     executiveSummary: string;
     keyFindings: { title: string; content: string; confidence: number; contributors: string[] }[];
     methodology: { leadModel: string; reviewers: string[] };
     overallConfidence: number;
+    votingResults?: { winner: string; votes: Record<string, number>; totalVotes: number };
   } | null;
   differences: { topic: string; positions: { model: string; position: string; color: string }[] }[];
   draft: string;
+  question: string;
+  selectedModels: string[];
+  exporting: boolean;
+  onExport: () => void;
 }) {
   if (!result && !draft) return null;
 
@@ -262,12 +273,63 @@ function SynthesisReport({
         className="rounded-2xl border p-6"
         style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}
       >
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-          Unified Synthesis
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            📝 Unified Synthesis
+            {result?.votingResults && (
+              <span className="ml-2 text-sm font-normal px-2 py-0.5 rounded-full" style={{ backgroundColor: '#dbeafe', color: '#1d4ed8' }}>
+                🏆 Winner: {result.votingResults.winner}
+              </span>
+            )}
+          </h2>
+          {result && (
+            <button
+              onClick={onExport}
+              disabled={exporting}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+              style={{
+                backgroundColor: exporting ? 'var(--bg-tertiary)' : '#3b82f6',
+                color: exporting ? 'var(--text-tertiary)' : '#fff',
+                cursor: exporting ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {exporting ? (
+                <>
+                  <span className="animate-spin">⏳</span> Exporting...
+                </>
+              ) : (
+                <>📄 Export Word</>
+              )}
+            </button>
+          )}
+        </div>
 
         {result ? (
           <>
+            {/* Voting Results */}
+            {result.votingResults && (
+              <div className="mb-6 p-4 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+                <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>
+                  🗳️ Voting Results
+                </h3>
+                <div className="flex flex-wrap gap-3">
+                  {Object.entries(result.votingResults.votes).map(([model, count]) => (
+                    <div
+                      key={model}
+                      className={`px-3 py-2 rounded-lg text-sm ${model === result.votingResults!.winner ? 'ring-2 ring-blue-500' : ''}`}
+                      style={{ backgroundColor: 'var(--bg-secondary)' }}
+                    >
+                      <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{model}</span>
+                      <span className="ml-2 text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                        {count} vote{count !== 1 ? 's' : ''} ({Math.round(count / result.votingResults!.totalVotes * 100)}%)
+                      </span>
+                      {model === result.votingResults!.winner && <span className="ml-1">🏆</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Executive Summary */}
             <div className="mb-6">
               <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
@@ -316,8 +378,8 @@ function SynthesisReport({
               style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}
             >
               <div className="font-medium mb-2">Methodology</div>
-              <div>Lead Model: {result.methodology.leadModel}</div>
-              <div>Reviewers: {result.methodology.reviewers.join(', ')}</div>
+              <div>Winning Draft: {result.methodology.leadModel}</div>
+              <div>Other Drafters: {result.methodology.reviewers.join(', ')}</div>
               <div>Overall Confidence: {result.overallConfidence}%</div>
             </div>
           </>
@@ -338,7 +400,7 @@ function SynthesisReport({
         style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: '#f59e0b' }}
       >
         <h3 className="text-sm font-semibold mb-3 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-          Points of Difference
+          ⚡ Points of Difference
         </h3>
 
         {differences.length === 0 ? (
@@ -350,22 +412,32 @@ function SynthesisReport({
             {differences.map((diff, idx) => (
               <div
                 key={idx}
-                className="rounded-lg p-3 border-l-4"
-                style={{ backgroundColor: 'var(--bg-secondary)', borderLeftColor: '#f59e0b' }}
+                className="rounded-lg p-3"
+                style={{ backgroundColor: 'var(--bg-secondary)' }}
               >
-                <h4 className="text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
+                <h4 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
                   {diff.topic}
                 </h4>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {diff.positions.map((pos, pidx) => (
-                    <div key={pidx} className="text-xs">
+                    <div
+                      key={pidx}
+                      className="rounded-lg p-2 border-l-4"
+                      style={{
+                        backgroundColor: `${pos.color}10`,
+                        borderLeftColor: pos.color,
+                        borderTop: `1px solid ${pos.color}30`,
+                        borderRight: `1px solid ${pos.color}30`,
+                        borderBottom: `1px solid ${pos.color}30`,
+                      }}
+                    >
                       <span
-                        className="inline-block px-2 py-0.5 rounded-full text-white font-medium mb-1"
+                        className="inline-block px-2 py-0.5 rounded-full text-white text-xs font-medium mb-1"
                         style={{ backgroundColor: pos.color }}
                       >
                         {pos.model}
                       </span>
-                      <p style={{ color: 'var(--text-secondary)' }}>{pos.position}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{pos.position}</p>
                     </div>
                   ))}
                 </div>
@@ -389,18 +461,21 @@ export default function Home() {
   const [nsfwMode, setNsfwMode] = useState(false);
   const [synthesisMode, setSynthesisMode] = useState(false);
   const [synthesisPhase, setSynthesisPhase] = useState<string>('');
-  const [synthesisLeadModel, setSynthesisLeadModel] = useState<string>('');
+  const [synthesisWinnerModel, setSynthesisWinnerModel] = useState<string>('');
   const [synthesisResult, setSynthesisResult] = useState<{
     executiveSummary: string;
     keyFindings: { title: string; content: string; confidence: number; contributors: string[] }[];
     methodology: { leadModel: string; reviewers: string[] };
     overallConfidence: number;
+    votingResults?: { winner: string; votes: Record<string, number>; totalVotes: number };
   } | null>(null);
   const [synthesisDifferences, setSynthesisDifferences] = useState<{
     topic: string;
     positions: { model: string; position: string; color: string }[];
   }[]>([]);
   const [synthesisDraft, setSynthesisDraft] = useState<string>('');
+  const [synthesisDrafts, setSynthesisDrafts] = useState<Record<string, string>>({});
+  const [synthesisVotes, setSynthesisVotes] = useState<Record<string, string>>({});
   const [discussion, setDiscussion] = useState({
     status: 'idle' as 'idle' | 'running' | 'complete' | 'error',
     phase: 'idle' as string,
@@ -716,6 +791,41 @@ export default function Home() {
     setExporting(false);
   };
 
+  const handleSynthesisExportDOCX = async () => {
+    console.log('Synthesis Export DOCX clicked');
+    if (!synthesisResult) {
+      console.log('No synthesis result, returning');
+      return;
+    }
+    setExporting(true);
+    try {
+      const reportData: SynthesisReportData = {
+        question: discussion.currentQuestion,
+        date: new Date().toLocaleDateString('ru-RU', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        synthesis: synthesisResult,
+        differences: synthesisDifferences,
+        models: selectedModels.map(id => {
+          const model = getModel(id);
+          return model?.name || id;
+        }),
+      };
+
+      console.log('Generating Synthesis DOCX with data:', reportData);
+      const blob = await generateSynthesisDOCX(reportData);
+      console.log('Synthesis DOCX blob generated:', blob);
+      downloadDOCX(blob, `AI_Roundtable_Synthesis_${new Date().toISOString().split('T')[0]}.docx`);
+    } catch (e) {
+      console.error(e);
+    }
+    setExporting(false);
+  };
+
   const handleSSE = (event: string, data: Record<string, unknown>) => {
     switch (event) {
       case 'iteration_start':
@@ -926,8 +1036,11 @@ export default function Home() {
       case 'synthesis_mode_started':
         setSynthesisPhase('started');
         setSynthesisDraft('');
+        setSynthesisDrafts({});
+        setSynthesisVotes({});
         setSynthesisResult(null);
         setSynthesisDifferences([]);
+        setSynthesisWinnerModel('');
         break;
 
       case 'analysis_phase_start':
@@ -939,22 +1052,28 @@ export default function Home() {
         // Individual model analysis complete
         break;
 
-      case 'lead_model_selected':
-        setSynthesisLeadModel(data.model as string);
-        break;
-
       case 'draft_phase_start':
         setSynthesisPhase('drafting');
+        setSynthesisDrafts({});
         setDiscussion(p => ({ ...p, phase: 'synthesis_drafting' }));
         break;
 
       case 'draft_token':
-        setSynthesisDraft(prev => prev + (data.token as string));
+        // Now drafts come from all models
+        if (data.model) {
+          setSynthesisDrafts(prev => ({
+            ...prev,
+            [data.model as string]: (prev[data.model as string] || '') + (data.token as string)
+          }));
+        } else {
+          // Fallback for finalization tokens
+          setSynthesisDraft(prev => prev + (data.token as string));
+        }
         setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'draft_complete':
-        setSynthesisPhase('draft_complete');
+        // Individual model draft complete
         break;
 
       case 'review_phase_start':
@@ -969,6 +1088,24 @@ export default function Home() {
 
       case 'review_complete':
         // Individual reviewer complete
+        break;
+
+      case 'voting_phase_start':
+        setSynthesisPhase('voting');
+        setSynthesisVotes({});
+        setDiscussion(p => ({ ...p, phase: 'synthesis_voting' }));
+        break;
+
+      case 'vote_cast':
+        setSynthesisVotes(prev => ({
+          ...prev,
+          [data.voter as string]: data.votedFor as string
+        }));
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
+      case 'voting_complete':
+        setSynthesisWinnerModel(data.winner as string);
         break;
 
       case 'finalization_start':
@@ -1024,10 +1161,12 @@ export default function Home() {
 
     // Reset synthesis state
     setSynthesisPhase('');
-    setSynthesisLeadModel('');
+    setSynthesisWinnerModel('');
     setSynthesisResult(null);
     setSynthesisDifferences([]);
     setSynthesisDraft('');
+    setSynthesisDrafts({});
+    setSynthesisVotes({});
 
     setDiscussion({
       status: 'running',
@@ -1140,10 +1279,11 @@ export default function Home() {
 
     // Synthesis mode phases
     if (phase === 'synthesis_starting') return 'Starting synthesis mode...';
-    if (phase === 'synthesis_analysis') return 'Models analyzing question...';
-    if (phase === 'synthesis_drafting') return `${synthesisLeadModel || 'Lead model'} drafting synthesis...`;
-    if (phase === 'synthesis_reviewing') return 'Peer review in progress...';
-    if (phase === 'synthesis_finalizing') return 'Finalizing synthesis...';
+    if (phase === 'synthesis_analysis') return 'All models analyzing question...';
+    if (phase === 'synthesis_drafting') return `All models writing drafts... (${Object.keys(synthesisDrafts).length} drafts)`;
+    if (phase === 'synthesis_reviewing') return 'Cross-review in progress...';
+    if (phase === 'synthesis_voting') return `Models voting for best draft... (${Object.keys(synthesisVotes).length} votes)`;
+    if (phase === 'synthesis_finalizing') return `${synthesisWinnerModel || 'Winner'} finalizing synthesis...`;
     if (phase === 'synthesis_error') return 'Synthesis error';
 
     // Discussion mode phases
@@ -1185,7 +1325,7 @@ export default function Home() {
               <span className="text-sm font-bold">ai</span>
             </div>
             <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>Roundtable</span>
-            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.1.0</span>
+            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.2.0</span>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center rounded-full p-1 gap-1" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
@@ -1302,16 +1442,10 @@ export default function Home() {
           )}
           <textarea
             value={question}
-            onChange={e => {
-              setQuestion(e.target.value);
-              // Auto-resize textarea
-              e.target.style.height = 'auto';
-              e.target.style.height = `${Math.min(e.target.scrollHeight, 300)}px`;
-            }}
+            onChange={e => setQuestion(e.target.value)}
             placeholder={thread.length > 0 ? 'Ask a follow-up...' : 'What would you like to discuss?'}
-            className="w-full bg-transparent text-lg focus:outline-none resize-none overflow-hidden"
-            style={{ color: 'var(--text-primary)', minHeight: '56px', maxHeight: '300px' }}
-            rows={1}
+            className="w-full bg-transparent text-lg focus:outline-none resize-none overflow-y-auto"
+            style={{ color: 'var(--text-primary)', height: '120px' }}
             disabled={discussion.status === 'running'}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey && question.trim() && selectedModels.length >= 2) {
@@ -1474,7 +1608,7 @@ export default function Home() {
             {/* Synthesis Mode Progress */}
             {synthesisMode && discussion.phase.startsWith('synthesis') ? (
               <>
-                <SynthesisProgress phase={synthesisPhase || discussion.phase} leadModel={synthesisLeadModel} />
+                <SynthesisProgress phase={synthesisPhase || discussion.phase} winnerModel={synthesisWinnerModel} />
                 <div className="flex items-center gap-3">
                   <div className="w-3 h-3 rounded-full bg-blue-500 animate-pulse" />
                   <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{getPhaseText()}</span>
@@ -1591,15 +1725,86 @@ export default function Home() {
           </div>
         )}
 
-        {/* Model columns */}
-        {/* Synthesis Draft Preview during generation */}
-        {discussion.status === 'running' && synthesisMode && synthesisDraft && (
+        {/* Synthesis Mode - All Drafts Preview during drafting phase */}
+        {discussion.status === 'running' && synthesisMode && (synthesisPhase === 'drafting' || synthesisPhase === 'synthesis_drafting') && Object.keys(synthesisDrafts).length > 0 && (
+          <div
+            className="mb-6 grid gap-4"
+            style={{ gridTemplateColumns: `repeat(${Math.min(Object.keys(synthesisDrafts).length, 3)}, 1fr)` }}
+          >
+            {Object.entries(synthesisDrafts).map(([modelId, draft]) => {
+              const model = getModel(modelId);
+              return (
+                <div
+                  key={modelId}
+                  className="rounded-xl border-2 overflow-hidden"
+                  style={{ backgroundColor: 'var(--bg-secondary)', borderColor: model?.color || 'var(--border-primary)' }}
+                >
+                  <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-secondary)' }}>
+                    <div className="w-2 h-2 rounded-full" style={{ backgroundColor: model?.color || '#888' }} />
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{model?.name || modelId}</span>
+                    <span className="text-xs ml-auto" style={{ color: 'var(--text-tertiary)' }}>{draft.split(/\s+/).length} words</span>
+                  </div>
+                  <div className="p-4 max-h-64 overflow-y-auto text-sm whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                    {draft.slice(0, 500)}
+                    {draft.length > 500 && '...'}
+                    <span className="animate-pulse">|</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Synthesis Mode - Voting Progress */}
+        {discussion.status === 'running' && synthesisMode && (synthesisPhase === 'voting' || synthesisPhase === 'synthesis_voting') && (
+          <div
+            className="mb-6 p-6 rounded-xl border"
+            style={{ backgroundColor: 'var(--bg-secondary)', borderColor: '#8b5cf6' }}
+          >
+            <h3 className="text-sm font-medium mb-4 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+              🗳️ Voting for Best Draft
+            </h3>
+            <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(selectedModels.length, 3)}, 1fr)` }}>
+              {selectedModels.map(modelId => {
+                const model = getModel(modelId);
+                const vote = synthesisVotes[model?.name || ''];
+                return (
+                  <div
+                    key={modelId}
+                    className="rounded-lg p-3 border"
+                    style={{
+                      backgroundColor: vote ? 'var(--success-bg)' : 'var(--bg-tertiary)',
+                      borderColor: vote ? 'var(--success-text)' : 'var(--border-primary)'
+                    }}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: model?.color || '#888' }} />
+                      <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{model?.name}</span>
+                    </div>
+                    {vote ? (
+                      <div className="text-xs" style={{ color: 'var(--success-text)' }}>
+                        Voted for: {vote}
+                      </div>
+                    ) : (
+                      <div className="text-xs animate-pulse" style={{ color: 'var(--text-tertiary)' }}>
+                        Voting...
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Synthesis Mode - Final synthesis generation */}
+        {discussion.status === 'running' && synthesisMode && (synthesisPhase === 'finalizing' || synthesisPhase === 'synthesis_finalizing') && synthesisDraft && (
           <div
             className="mb-6 p-6 rounded-xl border"
             style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}
           >
-            <h3 className="text-sm font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>
-              {synthesisPhase === 'drafting' || synthesisPhase === 'synthesis_drafting' ? 'Draft Preview' : 'Final Synthesis'}
+            <h3 className="text-sm font-medium mb-3 flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
+              ✨ Final Synthesis by {synthesisWinnerModel}
             </h3>
             <div
               className="prose prose-sm max-w-none whitespace-pre-wrap"
@@ -1704,6 +1909,10 @@ export default function Home() {
               result={synthesisResult}
               differences={synthesisDifferences}
               draft={synthesisDraft}
+              question={discussion.currentQuestion}
+              selectedModels={selectedModels}
+              exporting={exporting}
+              onExport={handleSynthesisExportDOCX}
             />
           </div>
         )}
