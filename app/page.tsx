@@ -5,9 +5,9 @@ import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, generateSynthesis
 
 const AVAILABLE_MODELS = [
   // Flagship tier
-  { id: 'openai/gpt-5.2-pro', name: 'GPT-5.2 Pro', color: '#10b981', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
-  { id: 'anthropic/claude-opus-4.5', name: 'Claude Opus 4.5', color: '#f59e0b', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
-  { id: 'google/gemini-3-pro-preview', name: 'Gemini 3 Pro', color: '#4285f4', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
+  { id: 'openai/gpt-5.3-codex', name: 'GPT-5.3 Codex', color: '#10b981', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
+  { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6', color: '#f59e0b', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
+  { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', color: '#4285f4', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
   // Fast tier
   { id: 'openai/gpt-5.2', name: 'GPT-5.2', color: '#059669', tier: 'fast', supportsFiles: true, fileTypes: ['image', 'pdf'] },
   { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', color: '#34a853', tier: 'fast', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
@@ -19,7 +19,7 @@ const PRESETS = {
     name: 'Expert Panel',
     description: 'Top SOTA models for serious tasks',
     icon: '🎓',
-    models: ['openai/gpt-5.2-pro', 'anthropic/claude-opus-4.5', 'google/gemini-3-pro-preview'],
+    models: ['openai/gpt-5.3-codex', 'anthropic/claude-opus-4.6', 'google/gemini-3.1-pro-preview'],
   },
   speed: {
     name: 'Speed Round',
@@ -1325,7 +1325,7 @@ export default function Home() {
               <span className="text-sm font-bold">ai</span>
             </div>
             <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>Roundtable</span>
-            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.2.1</span>
+            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.3.0</span>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center rounded-full p-1 gap-1" style={{ backgroundColor: 'var(--bg-tertiary)' }}>

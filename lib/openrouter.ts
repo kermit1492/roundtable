@@ -14,28 +14,28 @@ export interface ModelConfig {
   reasoningEnabled?: boolean;
 }
 
-// SOTA Models - January 2026
+// SOTA Models - March 2026
 export const AVAILABLE_MODELS: ModelConfig[] = [
   // Flagship tier
   {
-    id: 'openai/gpt-5.2-pro',
-    name: 'GPT-5.2 Pro',
+    id: 'openai/gpt-5.3-codex',
+    name: 'GPT-5.3 Codex',
     color: '#10b981',
     tier: 'flagship',
     supportsFiles: true,
     supportedFileTypes: ['image', 'pdf'],
   },
   {
-    id: 'anthropic/claude-opus-4.5',
-    name: 'Claude Opus 4.5',
+    id: 'anthropic/claude-opus-4.6',
+    name: 'Claude Opus 4.6',
     color: '#f59e0b',
     tier: 'flagship',
     supportsFiles: true,
     supportedFileTypes: ['image', 'pdf'],
   },
   {
-    id: 'google/gemini-3-pro-preview',
-    name: 'Gemini 3 Pro',
+    id: 'google/gemini-3.1-pro-preview',
+    name: 'Gemini 3.1 Pro',
     color: '#4285f4',
     tier: 'flagship',
     supportsFiles: true,

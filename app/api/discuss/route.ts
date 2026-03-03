@@ -58,9 +58,9 @@ interface VoteResult {
 
 const MODEL_NAMES: Record<string, string> = {
   // Flagship
-  'openai/gpt-5.2-pro': 'GPT-5.2 Pro',
-  'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
-  'google/gemini-3-pro-preview': 'Gemini 3 Pro',
+  'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
+  'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
+  'google/gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
   // Fast
   'openai/gpt-5.2': 'GPT-5.2',
   'google/gemini-3-flash-preview': 'Gemini 3 Flash',
@@ -772,10 +772,10 @@ Here are the raw points from each model:
 Respond with ONLY valid JSON:
 {
   "agreements": [
-    { "point": "consolidated point description", "count": 3, "models": ["GPT-5.2 Pro", "Claude Opus 4.5", "Gemini 3 Pro"] }
+    { "point": "consolidated point description", "count": 3, "models": ["GPT-5.3 Codex", "Claude Opus 4.6", "Gemini 3.1 Pro"] }
   ],
   "disagreements": [
-    { "point": "what they disagree on", "sides": [{"position": "position A", "models": ["GPT-5.2 Pro"]}, {"position": "position B", "models": ["Gemini 3 Pro"]}] }
+    { "point": "what they disagree on", "sides": [{"position": "position A", "models": ["GPT-5.3 Codex"]}, {"position": "position B", "models": ["Gemini 3.1 Pro"]}] }
   ]
 }
 
@@ -864,9 +864,9 @@ async function handleSynthesisMode(
   file?: FileAttachment
 ) {
   const MODEL_COLORS: Record<string, string> = {
-    'openai/gpt-5.2-pro': '#10b981',
-    'anthropic/claude-opus-4.5': '#f59e0b',
-    'google/gemini-3-pro-preview': '#4285f4',
+    'openai/gpt-5.3-codex': '#10b981',
+    'anthropic/claude-opus-4.6': '#f59e0b',
+    'google/gemini-3.1-pro-preview': '#4285f4',
     'openai/gpt-5.2': '#059669',
     'google/gemini-3-flash-preview': '#34a853',
     'anthropic/claude-sonnet-4.5': '#d97706',
