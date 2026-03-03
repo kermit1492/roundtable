@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // 5 minutes (Vercel Pro limit)
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const MAX_ITERATIONS = 5;
