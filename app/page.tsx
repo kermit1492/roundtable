@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, generateSynthesisDOCX, generateSynthesisLaTeX, type ReportData, type ModelResponse, type SynthesisReportData } from './components/PDFReport';
 
 const AVAILABLE_MODELS = [
@@ -241,6 +243,41 @@ function SynthesisProgress({ phase, winnerModel }: { phase: string; winnerModel:
   );
 }
 
+// Render text with LaTeX math formulas using KaTeX
+function renderWithLatex(text: string): string {
+  // Replace display math \[...\] and $$...$$
+  let html = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
+    try { return katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }); }
+    catch { return math; }
+  });
+  html = html.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
+    try { return katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }); }
+    catch { return math; }
+  });
+  // Replace inline math \(...\) and $...$
+  html = html.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
+    try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); }
+    catch { return math; }
+  });
+  html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => {
+    try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); }
+    catch { return math; }
+  });
+  // Convert markdown bold
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  return html;
+}
+
+function LatexText({ text, className, style }: { text: string; className?: string; style?: React.CSSProperties }) {
+  const html = useMemo(() => renderWithLatex(text), [text]);
+  return <span className={className} style={style} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function LatexBlock({ text, className, style }: { text: string; className?: string; style?: React.CSSProperties }) {
+  const html = useMemo(() => renderWithLatex(text), [text]);
+  return <div className={className} style={style} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 function SynthesisReport({
   result,
   differences,
@@ -268,6 +305,8 @@ function SynthesisReport({
   exportingLaTeX: boolean;
   onExportLaTeX: () => void;
 }) {
+  const [latexMode, setLatexMode] = useState(false);
+
   if (!result && !draft) return null;
 
   return (
@@ -287,7 +326,20 @@ function SynthesisReport({
             )}
           </h2>
           {result && (
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center">
+              <button
+                onClick={() => setLatexMode(!latexMode)}
+                className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5"
+                style={{
+                  backgroundColor: latexMode ? '#7c3aed' : 'var(--bg-tertiary)',
+                  color: latexMode ? '#fff' : 'var(--text-secondary)',
+                  border: `1px solid ${latexMode ? '#7c3aed' : 'var(--border-primary)'}`,
+                }}
+                title="Toggle LaTeX formula rendering"
+              >
+                <span style={{ fontFamily: 'serif', fontStyle: 'italic', fontWeight: 'bold', fontSize: '13px' }}>T<sub>E</sub>X</span>
+                {latexMode ? ' ON' : ' OFF'}
+              </button>
               <button
                 onClick={onExport}
                 disabled={exporting}
@@ -363,9 +415,13 @@ function SynthesisReport({
                 className="prose prose-sm max-w-none"
                 style={{ color: 'var(--text-primary)' }}
               >
-                {result.executiveSummary.split('\n').map((p, i) => (
-                  <p key={i} className="mb-2">{p}</p>
-                ))}
+                {result.executiveSummary.split('\n').map((p, i) =>
+                  latexMode ? (
+                    <LatexBlock key={i} text={p} className="mb-2" />
+                  ) : (
+                    <p key={i} className="mb-2">{p}</p>
+                  )
+                )}
               </div>
             </div>
 
@@ -382,11 +438,19 @@ function SynthesisReport({
                     style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-primary)' }}
                   >
                     <h4 className="font-medium mb-2" style={{ color: 'var(--text-primary)' }}>
-                      {idx + 1}. {finding.title}
+                      {latexMode ? (
+                        <LatexText text={`${idx + 1}. ${finding.title}`} />
+                      ) : (
+                        <>{idx + 1}. {finding.title}</>
+                      )}
                     </h4>
-                    <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
-                      {finding.content}
-                    </p>
+                    {latexMode ? (
+                      <LatexBlock text={finding.content} className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }} />
+                    ) : (
+                      <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
+                        {finding.content}
+                      </p>
+                    )}
                     <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--text-tertiary)' }}>
                       <span>Confidence: {finding.confidence}%</span>
                       <span>Contributors: {finding.contributors.join(', ')}</span>
@@ -409,12 +473,20 @@ function SynthesisReport({
           </>
         ) : (
           /* Show draft while generating */
-          <div
-            className="prose prose-sm max-w-none whitespace-pre-wrap"
-            style={{ color: 'var(--text-primary)' }}
-          >
-            {draft || 'Generating synthesis...'}
-          </div>
+          latexMode ? (
+            <LatexBlock
+              text={draft || 'Generating synthesis...'}
+              className="prose prose-sm max-w-none whitespace-pre-wrap"
+              style={{ color: 'var(--text-primary)' }}
+            />
+          ) : (
+            <div
+              className="prose prose-sm max-w-none whitespace-pre-wrap"
+              style={{ color: 'var(--text-primary)' }}
+            >
+              {draft || 'Generating synthesis...'}
+            </div>
+          )
         )}
       </div>
 
@@ -440,7 +512,7 @@ function SynthesisReport({
                 style={{ backgroundColor: 'var(--bg-secondary)' }}
               >
                 <h4 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
-                  {diff.topic}
+                  {latexMode ? <LatexText text={diff.topic} /> : diff.topic}
                 </h4>
                 <div className="space-y-3">
                   {diff.positions.map((pos, pidx) => (
@@ -461,7 +533,11 @@ function SynthesisReport({
                       >
                         {pos.model}
                       </span>
-                      <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{pos.position}</p>
+                      {latexMode ? (
+                        <LatexBlock text={pos.position} className="text-xs" style={{ color: 'var(--text-secondary)' }} />
+                      ) : (
+                        <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{pos.position}</p>
+                      )}
                     </div>
                   ))}
                 </div>
