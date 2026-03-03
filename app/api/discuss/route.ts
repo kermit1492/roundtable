@@ -899,7 +899,7 @@ async function handleSynthesisMode(
           send('model_token', { model: modelId, token, phase: 'analysis' });
         },
         MAX_RESPONSE_TOKENS,
-        180000 // 3 minutes timeout for synthesis analysis
+        240000 // 4 minutes timeout for synthesis analysis
       );
 
       send('analysis_complete', { model: modelName, wordCount: fullResponse.split(/\s+/).length });
@@ -957,7 +957,7 @@ async function handleSynthesisMode(
           send('draft_token', { model: analysis.modelId, token });
         },
         10000, // Tokens for comprehensive draft
-        180000 // 3 minutes timeout for synthesis drafts
+        240000 // 4 minutes timeout for synthesis drafts
       );
       send('draft_complete', { model: analysis.modelName, wordCount: draft.split(/\s+/).length });
       return { modelId: analysis.modelId, modelName: analysis.modelName, draft };
@@ -1020,7 +1020,7 @@ async function handleSynthesisMode(
               send('review_token', { reviewer: reviewer.modelId, target: target.modelId, token });
             },
             3000,
-            120000 // 2 minutes timeout for reviews
+            180000 // 3 minutes timeout for reviews
           );
 
           // Extract rating from review
@@ -1197,7 +1197,7 @@ async function handleSynthesisMode(
         send('finalization_token', { token });
       },
       12000,
-      180000 // 3 minutes timeout for finalization
+      300000 // 5 minutes timeout for finalization
     );
   } catch (error) {
     console.error(`[${winner.modelName}] Finalization failed:`, error);
