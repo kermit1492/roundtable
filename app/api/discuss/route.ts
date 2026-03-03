@@ -274,9 +274,11 @@ async function streamModel(
       await new Promise(r => setTimeout(r, 2000 * attempt)); // backoff: 2s, 4s
     }
 
+    let timedOut = false;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
-      console.log(`[${actualModelId}] Stream timeout reached`);
+      timedOut = true;
+      console.log(`[${actualModelId}] Stream timeout reached (${timeoutMs / 1000}s)`);
       controller.abort();
     }, timeoutMs);
 
@@ -383,12 +385,14 @@ async function streamModel(
     const errMsg = error instanceof Error ? error.message : String(error);
     const causeMsg = (error instanceof Error && error.cause instanceof Error) ? error.cause.message : '';
     const fullMsg = errMsg + ' ' + causeMsg;
-    const isRetryable = fullMsg.includes('other side closed') ||
+    const isRetryable = !timedOut && (
+                        fullMsg.includes('other side closed') ||
                         fullMsg.includes('UND_ERR_SOCKET') ||
                         fullMsg.includes('ECONNRESET') ||
                         fullMsg.includes('fetch failed') ||
                         fullMsg.includes('terminated') ||
-                        fullMsg.includes('network');
+                        fullMsg.includes('aborted') ||
+                        fullMsg.includes('network'));
 
     if (isRetryable && attempt < MAX_RETRIES) {
       console.warn(`[${actualModelId}] Retryable error (attempt ${attempt + 1}): ${errMsg}`);
@@ -923,7 +927,7 @@ async function handleSynthesisMode(
           send('model_token', { model: modelId, token, phase: 'analysis' });
         },
         MAX_RESPONSE_TOKENS,
-        240000 // 4 minutes timeout for synthesis analysis
+        300000 // 5 minutes timeout for synthesis analysis
       );
 
       send('analysis_complete', { model: modelName, wordCount: fullResponse.split(/\s+/).length });
@@ -981,7 +985,7 @@ async function handleSynthesisMode(
           send('draft_token', { model: analysis.modelId, token });
         },
         10000, // Tokens for comprehensive draft
-        240000 // 4 minutes timeout for synthesis drafts
+        360000 // 6 minutes timeout for synthesis drafts
       );
       send('draft_complete', { model: analysis.modelName, wordCount: draft.split(/\s+/).length });
       return { modelId: analysis.modelId, modelName: analysis.modelName, draft };
@@ -1044,7 +1048,7 @@ async function handleSynthesisMode(
               send('review_token', { reviewer: reviewer.modelId, target: target.modelId, token });
             },
             3000,
-            180000 // 3 minutes timeout for reviews
+            240000 // 4 minutes timeout for reviews
           );
 
           // Extract rating from review
@@ -1221,7 +1225,7 @@ async function handleSynthesisMode(
         send('finalization_token', { token });
       },
       12000,
-      300000 // 5 minutes timeout for finalization
+      360000 // 6 minutes timeout for finalization
     );
   } catch (error) {
     console.error(`[${winner.modelName}] Finalization failed:`, error);
