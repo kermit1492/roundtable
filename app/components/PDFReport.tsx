@@ -837,11 +837,43 @@ export async function generateSynthesisDOCX(data: SynthesisReportData): Promise<
 // ==================== LaTeX Export ====================
 
 function escapeLatex(text: string): string {
-  return text
-    .replace(/\\/g, '\\textbackslash{}')
-    .replace(/[&%$#_{}]/g, (m) => '\\' + m)
-    .replace(/~/g, '\\textasciitilde{}')
-    .replace(/\^/g, '\\textasciicircum{}');
+  // Protect math regions from escaping
+  const mathRegions: string[] = [];
+  let processed = text;
+
+  // Extract math regions using placeholders (order: longest delimiters first)
+  const mathPatterns = [
+    /\$\$[\s\S]*?\$\$/g,           // $$...$$
+    /\\\[[\s\S]*?\\\]/g,            // \[...\]
+    /\\\([\s\S]*?\\\)/g,            // \(...\)
+    /\$[^$\n]+?\$/g,                // $...$
+  ];
+  for (const pattern of mathPatterns) {
+    processed = processed.replace(pattern, (m) => {
+      mathRegions.push(m);
+      return `\x00MATH${mathRegions.length - 1}\x00`;
+    });
+  }
+
+  // Escape dangerous characters in non-math text only
+  processed = processed
+    .replace(/&/g, '\\&')
+    .replace(/%/g, '\\%')
+    .replace(/#/g, '\\#');
+
+  // Convert markdown bold to LaTeX bold
+  processed = processed.replace(/\*\*(.*?)\*\*/g, '\\textbf{$1}');
+
+  // Convert markdown horizontal rules
+  processed = processed.replace(/^---$/gm, '\\par\\noindent\\rule{\\linewidth}{0.4pt}\\par');
+
+  // Strip emojis (not renderable in pdflatex)
+  processed = processed.replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}]/gu, '');
+
+  // Restore math regions
+  processed = processed.replace(/\x00MATH(\d+)\x00/g, (_, idx) => mathRegions[parseInt(idx)]);
+
+  return processed;
 }
 
 export function generateSynthesisLaTeX(data: SynthesisReportData): string {
