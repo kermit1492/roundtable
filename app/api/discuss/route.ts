@@ -381,11 +381,14 @@ async function streamModel(
   } catch (error: unknown) {
     clearTimeout(timeoutId);
     const errMsg = error instanceof Error ? error.message : String(error);
-    const isRetryable = errMsg.includes('other side closed') ||
-                        errMsg.includes('UND_ERR_SOCKET') ||
-                        errMsg.includes('ECONNRESET') ||
-                        errMsg.includes('fetch failed') ||
-                        errMsg.includes('network');
+    const causeMsg = (error instanceof Error && error.cause instanceof Error) ? error.cause.message : '';
+    const fullMsg = errMsg + ' ' + causeMsg;
+    const isRetryable = fullMsg.includes('other side closed') ||
+                        fullMsg.includes('UND_ERR_SOCKET') ||
+                        fullMsg.includes('ECONNRESET') ||
+                        fullMsg.includes('fetch failed') ||
+                        fullMsg.includes('terminated') ||
+                        fullMsg.includes('network');
 
     if (isRetryable && attempt < MAX_RETRIES) {
       console.warn(`[${actualModelId}] Retryable error (attempt ${attempt + 1}): ${errMsg}`);
