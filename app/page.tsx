@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, generateSynthesisDOCX, type ReportData, type ModelResponse, type SynthesisReportData } from './components/PDFReport';
+import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, generateSynthesisDOCX, generateSynthesisLaTeX, type ReportData, type ModelResponse, type SynthesisReportData } from './components/PDFReport';
 
 const AVAILABLE_MODELS = [
   // Flagship tier
@@ -248,7 +248,9 @@ function SynthesisReport({
   question,
   selectedModels,
   exporting,
-  onExport
+  onExport,
+  exportingLaTeX,
+  onExportLaTeX
 }: {
   result: {
     executiveSummary: string;
@@ -263,6 +265,8 @@ function SynthesisReport({
   selectedModels: string[];
   exporting: boolean;
   onExport: () => void;
+  exportingLaTeX: boolean;
+  onExportLaTeX: () => void;
 }) {
   if (!result && !draft) return null;
 
@@ -283,24 +287,44 @@ function SynthesisReport({
             )}
           </h2>
           {result && (
-            <button
-              onClick={onExport}
-              disabled={exporting}
-              className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
-              style={{
-                backgroundColor: exporting ? 'var(--bg-tertiary)' : '#3b82f6',
-                color: exporting ? 'var(--text-tertiary)' : '#fff',
-                cursor: exporting ? 'not-allowed' : 'pointer',
-              }}
-            >
-              {exporting ? (
-                <>
-                  <span className="animate-spin">⏳</span> Exporting...
-                </>
-              ) : (
-                <>📄 Export Word</>
-              )}
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={onExport}
+                disabled={exporting}
+                className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+                style={{
+                  backgroundColor: exporting ? 'var(--bg-tertiary)' : '#3b82f6',
+                  color: exporting ? 'var(--text-tertiary)' : '#fff',
+                  cursor: exporting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {exporting ? (
+                  <>
+                    <span className="animate-spin">⏳</span> Exporting...
+                  </>
+                ) : (
+                  <>📄 Word</>
+                )}
+              </button>
+              <button
+                onClick={onExportLaTeX}
+                disabled={exportingLaTeX}
+                className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2"
+                style={{
+                  backgroundColor: exportingLaTeX ? 'var(--bg-tertiary)' : '#059669',
+                  color: exportingLaTeX ? 'var(--text-tertiary)' : '#fff',
+                  cursor: exportingLaTeX ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {exportingLaTeX ? (
+                  <>
+                    <span className="animate-spin">⏳</span> Exporting...
+                  </>
+                ) : (
+                  <>🔬 LaTeX</>
+                )}
+              </button>
+            </div>
           )}
         </div>
 
@@ -458,6 +482,7 @@ export default function Home() {
   const [thread, setThread] = useState<DiscussionEntry[]>([]);
   const [file, setFile] = useState<FileAttachment | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [exportingLaTeX, setExportingLaTeX] = useState(false);
   const [nsfwMode, setNsfwMode] = useState(false);
   const [synthesisMode, setSynthesisMode] = useState(false);
   const [synthesisPhase, setSynthesisPhase] = useState<string>('');
@@ -824,6 +849,40 @@ export default function Home() {
       console.error(e);
     }
     setExporting(false);
+  };
+
+  const handleSynthesisExportLaTeX = () => {
+    if (!synthesisResult) return;
+    setExportingLaTeX(true);
+    try {
+      const reportData: SynthesisReportData = {
+        question: discussion.currentQuestion,
+        date: new Date().toLocaleDateString('ru-RU', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
+        synthesis: synthesisResult,
+        differences: synthesisDifferences,
+        models: selectedModels.map(id => {
+          const model = getModel(id);
+          return model?.name || id;
+        }),
+      };
+      const tex = generateSynthesisLaTeX(reportData);
+      const blob = new Blob([tex], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `AI_Roundtable_Synthesis_${new Date().toISOString().split('T')[0]}.tex`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+    }
+    setExportingLaTeX(false);
   };
 
   const handleSSE = (event: string, data: Record<string, unknown>) => {
@@ -1913,6 +1972,8 @@ export default function Home() {
               selectedModels={selectedModels}
               exporting={exporting}
               onExport={handleSynthesisExportDOCX}
+              exportingLaTeX={exportingLaTeX}
+              onExportLaTeX={handleSynthesisExportLaTeX}
             />
           </div>
         )}

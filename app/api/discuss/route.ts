@@ -266,15 +266,21 @@ async function streamModel(
   timeoutMs: number = 90000 // Default 90 seconds, can be increased for synthesis
 ): Promise<string> {
   const actualModelId = getActualModelId(modelId);
-  const STREAM_TIMEOUT_MS = timeoutMs;
-  
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    console.log(`[${actualModelId}] Stream timeout reached`);
-    controller.abort();
-  }, STREAM_TIMEOUT_MS);
-  
-  try {
+  const MAX_RETRIES = 2;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      console.log(`[${actualModelId}] Retry attempt ${attempt}/${MAX_RETRIES}...`);
+      await new Promise(r => setTimeout(r, 2000 * attempt)); // backoff: 2s, 4s
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.log(`[${actualModelId}] Stream timeout reached`);
+      controller.abort();
+    }, timeoutMs);
+
+    try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -372,12 +378,27 @@ async function streamModel(
 
     console.log(`[${actualModelId}] Final response length: ${fullResponse.length} chars`);
     return fullResponse;
-  } catch (error) {
-    console.error(`[${actualModelId}] Stream error:`, error);
+  } catch (error: unknown) {
+    clearTimeout(timeoutId);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const isRetryable = errMsg.includes('other side closed') ||
+                        errMsg.includes('UND_ERR_SOCKET') ||
+                        errMsg.includes('ECONNRESET') ||
+                        errMsg.includes('fetch failed') ||
+                        errMsg.includes('network');
+
+    if (isRetryable && attempt < MAX_RETRIES) {
+      console.warn(`[${actualModelId}] Retryable error (attempt ${attempt + 1}): ${errMsg}`);
+      continue; // retry
+    }
+    console.error(`[${actualModelId}] Stream error (attempt ${attempt + 1}):`, error);
     throw error;
   } finally {
     clearTimeout(timeoutId);
   }
+  } // end retry loop
+
+  throw new Error(`[${actualModelId}] All ${MAX_RETRIES + 1} attempts failed`);
 }
 
 const SYSTEM_PROMPT = `You are {model_name}, an expert AI participating in a roundtable discussion with other AI models.

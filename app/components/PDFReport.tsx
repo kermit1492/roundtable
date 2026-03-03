@@ -833,3 +833,176 @@ export async function generateSynthesisDOCX(data: SynthesisReportData): Promise<
 
   return await Packer.toBlob(doc);
 }
+
+// ==================== LaTeX Export ====================
+
+function escapeLatex(text: string): string {
+  return text
+    .replace(/\\/g, '\\textbackslash{}')
+    .replace(/[&%$#_{}]/g, (m) => '\\' + m)
+    .replace(/~/g, '\\textasciitilde{}')
+    .replace(/\^/g, '\\textasciicircum{}');
+}
+
+export function generateSynthesisLaTeX(data: SynthesisReportData): string {
+  const lines: string[] = [];
+
+  // Preamble
+  lines.push('\\documentclass[11pt,a4paper]{article}');
+  lines.push('\\usepackage[utf8]{inputenc}');
+  lines.push('\\usepackage[T1,T2A]{fontenc}');
+  lines.push('\\usepackage[english,russian]{babel}');
+  lines.push('\\usepackage[margin=2cm]{geometry}');
+  lines.push('\\usepackage{paracol}');
+  lines.push('\\usepackage[dvipsnames,table]{xcolor}');
+  lines.push('\\usepackage{tcolorbox}');
+  lines.push('\\usepackage{enumitem}');
+  lines.push('\\usepackage{titlesec}');
+  lines.push('\\usepackage{graphicx}');
+  lines.push('\\usepackage{hyperref}');
+  lines.push('');
+
+  // Define model colors
+  const usedColors: Record<string, string> = {};
+  data.differences.forEach(diff => {
+    diff.positions.forEach(pos => {
+      const safeName = pos.model.replace(/[^a-zA-Z]/g, '');
+      if (!usedColors[safeName]) {
+        const rgb = hexToRgb(pos.color);
+        lines.push(`\\definecolor{${safeName}}{RGB}{${rgb.r},${rgb.g},${rgb.b}}`);
+        usedColors[safeName] = pos.color;
+      }
+    });
+  });
+  lines.push('\\definecolor{amberbg}{RGB}{255,251,235}');
+  lines.push('\\definecolor{amberborder}{RGB}{245,158,11}');
+  lines.push('\\definecolor{bluefinding}{RGB}{59,130,246}');
+  lines.push('\\definecolor{graytext}{RGB}{107,114,128}');
+  lines.push('\\definecolor{graybg}{RGB}{243,244,246}');
+  lines.push('');
+
+  // tcolorbox styles
+  lines.push('\\tcbset{');
+  lines.push('  finding/.style={colback=graybg!30,colframe=bluefinding,leftrule=3pt,rightrule=0pt,toprule=0pt,bottomrule=0pt,boxsep=4pt,left=4pt,right=4pt,top=2pt,bottom=2pt,sharp corners},');
+  lines.push('  sidebar/.style={colback=amberbg,colframe=amberborder,boxrule=1.5pt,boxsep=6pt,left=6pt,right=6pt,top=6pt,bottom=6pt,arc=2pt}');
+  lines.push('}');
+  lines.push('');
+
+  lines.push('\\setlength{\\parindent}{0pt}');
+  lines.push('\\setlength{\\parskip}{6pt}');
+  lines.push('');
+  lines.push('\\begin{document}');
+  lines.push('');
+
+  // Header
+  lines.push('\\begin{center}');
+  lines.push('{\\LARGE\\bfseries AI Roundtable --- Synthesis Report}\\\\[6pt]');
+  lines.push(`{\\color{graytext}\\small ${escapeLatex(data.date)} \\textbar\\ Models: ${escapeLatex(data.models.join(', '))}}`);
+  lines.push('\\end{center}');
+  lines.push('\\vspace{8pt}');
+  lines.push('');
+
+  // Two-column layout: 68% left, 32% right
+  lines.push('\\columnratio{0.68}');
+  lines.push('\\begin{paracol}{2}');
+  lines.push('');
+
+  // ===== LEFT COLUMN: Main Content =====
+
+  // Title with winner
+  lines.push('{\\Large\\bfseries Unified Synthesis}');
+  if (data.synthesis.votingResults) {
+    lines.push(`\\hfill{\\small\\color{blue!80!black} Winner: ${escapeLatex(data.synthesis.votingResults.winner)}}\\\\`);
+  }
+  lines.push('\\vspace{6pt}');
+  lines.push('');
+
+  // Voting Results
+  if (data.synthesis.votingResults) {
+    lines.push('\\colorbox{graybg}{\\parbox{\\dimexpr\\linewidth-2\\fboxsep}{\\textbf{Voting Results}}}');
+    lines.push('\\vspace{4pt}');
+    lines.push('\\begin{itemize}[leftmargin=1.5em,itemsep=2pt]');
+    for (const [model, count] of Object.entries(data.synthesis.votingResults.votes)) {
+      const percentage = Math.round(count / data.synthesis.votingResults.totalVotes * 100);
+      const isWinner = model === data.synthesis.votingResults.winner;
+      const badge = isWinner ? ' $\\bigstar$' : '';
+      lines.push(`  \\item \\textbf{${escapeLatex(model)}} --- ${count} vote${count !== 1 ? 's' : ''} (${percentage}\\%)${badge}`);
+    }
+    lines.push('\\end{itemize}');
+    lines.push('\\vspace{6pt}');
+    lines.push('');
+  }
+
+  // Executive Summary
+  lines.push('\\subsection*{Executive Summary}');
+  data.synthesis.executiveSummary.split('\n').forEach(para => {
+    if (para.trim()) {
+      lines.push(escapeLatex(para.trim()));
+      lines.push('');
+    }
+  });
+
+  // Key Findings
+  lines.push('\\subsection*{Key Findings}');
+  lines.push('');
+  data.synthesis.keyFindings.forEach((finding, idx) => {
+    lines.push('\\begin{tcolorbox}[finding]');
+    lines.push(`\\textbf{${idx + 1}. ${escapeLatex(finding.title)}}`);
+    lines.push('');
+    lines.push(escapeLatex(finding.content));
+    lines.push('');
+    lines.push(`{\\small\\itshape\\color{graytext} Confidence: ${finding.confidence}\\% \\textbar\\ Contributors: ${escapeLatex(finding.contributors.join(', '))}}`);
+    lines.push('\\end{tcolorbox}');
+    lines.push('\\vspace{4pt}');
+    lines.push('');
+  });
+
+  // Methodology
+  lines.push('\\subsection*{Methodology}');
+  lines.push(`\\textbf{Winning Draft:} ${escapeLatex(data.synthesis.methodology.leadModel)}\\\\`);
+  lines.push(`\\textbf{Other Drafters:} ${escapeLatex(data.synthesis.methodology.reviewers.join(', '))}\\\\`);
+  lines.push(`\\textbf{Overall Confidence:} ${data.synthesis.overallConfidence}\\%`);
+  lines.push('');
+
+  // ===== RIGHT COLUMN: Sidebar =====
+  lines.push('\\switchcolumn');
+  lines.push('');
+  lines.push('\\begin{tcolorbox}[sidebar]');
+  lines.push('{\\large\\bfseries Points of Difference}');
+  lines.push('\\vspace{6pt}');
+  lines.push('');
+
+  if (data.differences.length === 0) {
+    lines.push('{\\itshape\\color{graytext} No significant differences identified. Models reached consensus on all major points.}');
+  } else {
+    data.differences.forEach(diff => {
+      lines.push(`\\textbf{${escapeLatex(diff.topic)}}\\\\[4pt]`);
+
+      diff.positions.forEach(pos => {
+        const safeName = pos.model.replace(/[^a-zA-Z]/g, '');
+        lines.push(`\\begin{tcolorbox}[colback=white,colframe=${safeName},leftrule=3pt,rightrule=0pt,toprule=0pt,bottomrule=0pt,boxsep=2pt,left=4pt,right=2pt,top=2pt,bottom=2pt,sharp corners]`);
+        lines.push(`{\\small\\bfseries\\color{${safeName}} ${escapeLatex(pos.model)}}\\\\`);
+        lines.push(`{\\small ${escapeLatex(pos.position)}}`);
+        lines.push('\\end{tcolorbox}');
+        lines.push('\\vspace{2pt}');
+      });
+      lines.push('\\vspace{6pt}');
+      lines.push('');
+    });
+  }
+
+  lines.push('\\end{tcolorbox}');
+  lines.push('');
+  lines.push('\\end{paracol}');
+  lines.push('');
+
+  // Footer
+  lines.push('\\vspace{12pt}');
+  lines.push('\\begin{center}');
+  lines.push(`{\\small\\itshape\\color{graytext} Generated by AI Roundtable --- Synthesis Mode \\textbar\\ ${escapeLatex(data.date)}}`);
+  lines.push('\\end{center}');
+  lines.push('');
+  lines.push('\\end{document}');
+
+  return lines.join('\n');
+}
