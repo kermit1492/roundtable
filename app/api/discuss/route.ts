@@ -174,7 +174,7 @@ async function callModel(
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 sec timeout (optimized for Vercel)
+      const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 sec timeout
       
       if (attempt > 1) {
         console.log(`[${modelName}] Retry attempt ${attempt}/${retries}...`);
@@ -1244,6 +1244,8 @@ async function handleSynthesisMode(
   }
 
   // ==================== PHASE 6: Sign-off and Collect Differences ====================
+  send('signoff_start', { models: analyses.map(a => a.modelName) });
+
   const signoffs: { modelId: string; modelName: string; signoff: { approved: boolean; confidence: number; remaining_differences: { topic: string; my_position: string; synthesis_position: string; importance: string }[] } }[] = [];
 
   const signoffPromises = analyses.map(async (analysis) => {
@@ -1267,6 +1269,7 @@ async function handleSynthesisMode(
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(sanitizeJsonString(jsonMatch[0]));
+        send('signoff_complete', { model: analysis.modelName, approved: parsed.approved ?? true });
         return {
           modelId: analysis.modelId,
           modelName: analysis.modelName,
@@ -1280,6 +1283,7 @@ async function handleSynthesisMode(
     } catch (error) {
       console.error(`[${analysis.modelName}] Sign-off failed:`, error);
     }
+    send('signoff_complete', { model: analysis.modelName, approved: true, fallback: true });
     return {
       modelId: analysis.modelId,
       modelName: analysis.modelName,

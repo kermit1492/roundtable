@@ -1260,6 +1260,15 @@ export default function Home() {
         setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
+      case 'signoff_start':
+        setSynthesisPhase('signoff');
+        setDiscussion(p => ({ ...p, phase: 'synthesis_signoff', lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
+      case 'signoff_complete':
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
       case 'synthesis_complete':
         setSynthesisPhase('complete');
         setSynthesisResult(data.report as typeof synthesisResult);
