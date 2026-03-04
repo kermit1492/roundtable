@@ -1180,21 +1180,22 @@ export default function Home() {
         setSynthesisResult(null);
         setSynthesisDifferences([]);
         setSynthesisWinnerModel('');
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'analysis_phase_start':
         setSynthesisPhase('analysis');
-        setDiscussion(p => ({ ...p, phase: 'synthesis_analysis' }));
+        setDiscussion(p => ({ ...p, phase: 'synthesis_analysis', lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'analysis_complete':
-        // Individual model analysis complete
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'draft_phase_start':
         setSynthesisPhase('drafting');
         setSynthesisDrafts({});
-        setDiscussion(p => ({ ...p, phase: 'synthesis_drafting' }));
+        setDiscussion(p => ({ ...p, phase: 'synthesis_drafting', lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'draft_token':
@@ -1212,12 +1213,12 @@ export default function Home() {
         break;
 
       case 'draft_complete':
-        // Individual model draft complete
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'review_phase_start':
         setSynthesisPhase('reviewing');
-        setDiscussion(p => ({ ...p, phase: 'synthesis_reviewing' }));
+        setDiscussion(p => ({ ...p, phase: 'synthesis_reviewing', lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'review_token':
@@ -1226,13 +1227,13 @@ export default function Home() {
         break;
 
       case 'review_complete':
-        // Individual reviewer complete
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'voting_phase_start':
         setSynthesisPhase('voting');
         setSynthesisVotes({});
-        setDiscussion(p => ({ ...p, phase: 'synthesis_voting' }));
+        setDiscussion(p => ({ ...p, phase: 'synthesis_voting', lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'vote_cast':
@@ -1245,12 +1246,13 @@ export default function Home() {
 
       case 'voting_complete':
         setSynthesisWinnerModel(data.winner as string);
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'finalization_start':
         setSynthesisPhase('finalizing');
         setSynthesisDraft(''); // Clear draft, will get final
-        setDiscussion(p => ({ ...p, phase: 'synthesis_finalizing' }));
+        setDiscussion(p => ({ ...p, phase: 'synthesis_finalizing', lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'finalization_token':
