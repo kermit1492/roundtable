@@ -642,6 +642,10 @@ FORMAT your response EXACTLY as:
 ## Areas of Uncertainty
 [Any points where there's genuine uncertainty or the models offered different perspectives]
 
+MATH/SCIENCE FORMATTING: If the topic involves math, physics, or science, use LaTeX notation for all formulas.
+Use inline math with $...$ (e.g., $\\Psi$, $E = mc^2$) and display math with $$...$$ for important equations.
+This will be rendered in the browser with KaTeX.
+
 REMEMBER: Other models will also write drafts, and everyone will cross-review. Make your synthesis the best it can be!`;
 
 const SYNTHESIS_REVIEW_PROMPT = `You are {model_name}, reviewing the draft synthesis created by {draft_author}.
@@ -742,6 +746,10 @@ PRODUCE THE FINAL SYNTHESIS with the same format as the draft:
 - Key Findings (with confidence and contributors)
 - Areas of Uncertainty
 
+MATH/SCIENCE FORMATTING: If the topic involves math, physics, or science, use LaTeX notation for all formulas.
+Use inline math with $...$ (e.g., $\\Psi$, $E = mc^2$) and display math with $$...$$ for important equations.
+This will be rendered beautifully in the browser.
+
 At the end, add a section:
 ## Unresolved Differences
 [List any points where reviewers disagreed and you couldn't fully reconcile, with brief explanation]
@@ -782,6 +790,7 @@ RULES:
 - "remaining_differences": array of any points where you still disagree (can be empty [])
 - "importance": one of "minor", "moderate", "significant"
 - Be honest about differences - they will be shown in the report sidebar, not hidden
+- IMPORTANT: If the topic involves math/physics/science, use LaTeX notation for formulas in topic, my_position, and synthesis_position fields. Use inline math with $...$ delimiters (e.g., $\\Psi$, $\\int_a^b f(x) dx$). This will be rendered in the browser.
 
 Respond with ONLY the JSON, no other text.`;
 
