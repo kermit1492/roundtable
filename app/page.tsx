@@ -274,7 +274,11 @@ function LatexText({ text, className, style }: { text: string; className?: strin
 }
 
 function LatexBlock({ text, className, style }: { text: string; className?: string; style?: React.CSSProperties }) {
-  const html = useMemo(() => renderWithLatex(text), [text]);
+  const html = useMemo(() => {
+    const rendered = renderWithLatex(text);
+    // Convert remaining newlines to <br> (but not inside KaTeX output which uses its own layout)
+    return rendered.replace(/\n/g, '<br/>');
+  }, [text]);
   return <div className={className} style={style} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
@@ -415,12 +419,12 @@ function SynthesisReport({
                 className="prose prose-sm max-w-none"
                 style={{ color: 'var(--text-primary)' }}
               >
-                {result.executiveSummary.split('\n').map((p, i) =>
-                  latexMode ? (
-                    <LatexBlock key={i} text={p} className="mb-2" />
-                  ) : (
+                {latexMode ? (
+                  <LatexBlock text={result.executiveSummary} className="mb-2" />
+                ) : (
+                  result.executiveSummary.split('\n').map((p, i) => (
                     <p key={i} className="mb-2">{p}</p>
-                  )
+                  ))
                 )}
               </div>
             </div>
@@ -445,7 +449,7 @@ function SynthesisReport({
                       )}
                     </h4>
                     {latexMode ? (
-                      <LatexBlock text={finding.content} className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }} />
+                      <LatexBlock text={finding.content} className="text-sm mb-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }} />
                     ) : (
                       <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
                         {finding.content}
