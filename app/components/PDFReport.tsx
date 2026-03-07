@@ -861,8 +861,14 @@ function escapeLatex(text: string): string {
     .replace(/%/g, '\\%')
     .replace(/#/g, '\\#');
 
-  // Convert markdown bold to LaTeX bold
+  // Convert markdown bold then italic (order matters: ** before *)
   processed = processed.replace(/\*\*(.*?)\*\*/g, '\\textbf{$1}');
+  processed = processed.replace(/\*([^*]+?)\*/g, '\\textit{$1}');
+
+  // Convert quotation marks to LaTeX style: "text" → ``text''
+  processed = processed.replace(/\u201c/g, '``');   // left double quote
+  processed = processed.replace(/\u201d/g, "''");    // right double quote
+  processed = processed.replace(/"([^"]*?)"/g, "``$1''"); // straight double quotes
 
   // Convert markdown horizontal rules
   processed = processed.replace(/^---$/gm, '\\par\\noindent\\rule{\\linewidth}{0.4pt}\\par');
@@ -885,6 +891,7 @@ export function generateSynthesisLaTeX(data: SynthesisReportData): string {
   lines.push('\\usepackage[T1,T2A]{fontenc}');
   lines.push('\\usepackage[english,russian]{babel}');
   lines.push('\\usepackage[margin=2cm]{geometry}');
+  lines.push('\\usepackage{amsmath,amssymb}');
   lines.push('\\usepackage{paracol}');
   lines.push('\\usepackage[dvipsnames,table]{xcolor}');
   lines.push('\\usepackage{tcolorbox}');
