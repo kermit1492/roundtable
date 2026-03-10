@@ -18,8 +18,8 @@ export interface ModelConfig {
 export const AVAILABLE_MODELS: ModelConfig[] = [
   // Flagship tier
   {
-    id: 'openai/gpt-5.3-codex',
-    name: 'GPT-5.3 Codex',
+    id: 'openai/gpt-5.4-pro',
+    name: 'GPT-5.4 Pro',
     color: '#10b981',
     tier: 'flagship',
     supportsFiles: true,
