@@ -74,7 +74,7 @@ const MAX_RESPONSE_TOKENS = 8192;
 
 // Map internal model IDs to actual API model IDs
 const XAI_MODEL_MAP: Record<string, string> = {
-  'xai/grok-4.20-multi-agent': 'grok-4.20-beta-0309-reasoning',
+  'xai/grok-4.20-multi-agent': 'grok-4.20-multi-agent-beta-0309',
 };
 
 function getActualModelId(modelId: string): string {
@@ -186,7 +186,10 @@ async function callModel(
       }
       
       const isXai = modelId.startsWith('xai/');
-      const apiUrl = isXai ? 'https://api.x.ai/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
+      const isMultiAgent = actualModelId.includes('multi-agent');
+      const apiUrl = isXai
+        ? (isMultiAgent ? 'https://api.x.ai/v1/responses' : 'https://api.x.ai/v1/chat/completions')
+        : 'https://openrouter.ai/api/v1/chat/completions';
       const apiKey = isXai ? XAI_API_KEY : OPENROUTER_API_KEY;
       const apiModelId = isXai ? actualModelId.replace('xai/', '') : actualModelId;
 
@@ -198,15 +201,15 @@ async function callModel(
         headers['HTTP-Referer'] = 'https://roundtable.app';
       }
 
+      // Multi-agent uses Responses API format (input instead of messages, no max_tokens)
+      const body = isMultiAgent
+        ? { model: apiModelId, input: messages, reasoning: { effort: 'high' }, temperature }
+        : { model: apiModelId, messages, max_tokens: maxTokens, temperature };
+
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          model: apiModelId,
-          messages,
-          max_tokens: maxTokens,
-          temperature,
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
@@ -218,12 +221,21 @@ async function callModel(
       }
 
       const data = await response.json();
-      const message = data.choices?.[0]?.message;
 
       // Log full response for debugging
       console.log(`[${modelName}] API response:`, JSON.stringify(data).slice(0, 500));
 
-      const content = message?.content || message?.text || '';
+      // Multi-agent: extract from output[].content[].text
+      // Chat completions: extract from choices[].message.content
+      let content = '';
+      if (isMultiAgent) {
+        const outputMsg = data.output?.find((o: { type: string }) => o.type === 'message');
+        const textPart = outputMsg?.content?.find((c: { type: string }) => c.type === 'output_text');
+        content = textPart?.text || '';
+      } else {
+        const message = data.choices?.[0]?.message;
+        content = message?.content || message?.text || '';
+      }
       
       // Check for empty response
       if (!content || content.trim().length === 0) {
@@ -279,7 +291,10 @@ async function streamModel(
 
     try {
     const isXai = modelId.startsWith('xai/');
-    const apiUrl = isXai ? 'https://api.x.ai/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
+    const isMultiAgent = actualModelId.includes('multi-agent');
+    const apiUrl = isXai
+      ? (isMultiAgent ? 'https://api.x.ai/v1/responses' : 'https://api.x.ai/v1/chat/completions')
+      : 'https://openrouter.ai/api/v1/chat/completions';
     const apiKey = isXai ? XAI_API_KEY : OPENROUTER_API_KEY;
     const apiModelId = isXai ? actualModelId.replace('xai/', '') : actualModelId;
 
@@ -291,16 +306,15 @@ async function streamModel(
       headers['HTTP-Referer'] = 'https://roundtable.app';
     }
 
+    // Multi-agent uses Responses API format
+    const body = isMultiAgent
+      ? { model: apiModelId, input: messages, reasoning: { effort: 'high' }, temperature: 0.7, stream: true }
+      : { model: apiModelId, messages, max_tokens: maxTokens, temperature: 0.7, stream: true };
+
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model: apiModelId,
-        messages,
-        max_tokens: maxTokens,
-        temperature: 0.7,
-        stream: true,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
@@ -320,7 +334,7 @@ async function streamModel(
 
     while (true) {
       const { done, value } = await reader.read();
-      
+
       if (done) {
         console.log(`[${actualModelId}] Stream done, response length: ${fullResponse.length}`);
         break;
@@ -337,31 +351,46 @@ async function streamModel(
           streamFinished = true;
           break;
         }
-        
+
         if (line.startsWith('data: ')) {
           try {
             const json = JSON.parse(line.slice(6));
-            const choice = json.choices?.[0];
-            const delta = choice?.delta;
-            
-            // Check for finish reason
-            if (choice?.finish_reason) {
-              console.log(`[${actualModelId}] Finish reason: ${choice.finish_reason}`);
-              streamFinished = true;
-            }
 
-            const content = delta?.content || delta?.text || '';
-            
-            if (content) {
-              fullResponse += content;
-              onToken(content);
+            if (isMultiAgent) {
+              // Responses API streaming: event type in json.type
+              if (json.type === 'response.output_text.delta') {
+                const content = json.delta || '';
+                if (content) {
+                  fullResponse += content;
+                  onToken(content);
+                }
+              } else if (json.type === 'response.completed') {
+                console.log(`[${actualModelId}] Multi-agent response completed`);
+                streamFinished = true;
+              }
+            } else {
+              // Chat completions streaming
+              const choice = json.choices?.[0];
+              const delta = choice?.delta;
+
+              if (choice?.finish_reason) {
+                console.log(`[${actualModelId}] Finish reason: ${choice.finish_reason}`);
+                streamFinished = true;
+              }
+
+              const content = delta?.content || delta?.text || '';
+
+              if (content) {
+                fullResponse += content;
+                onToken(content);
+              }
             }
           } catch (e) {
             // Ignore parse errors for partial JSON
           }
         }
       }
-      
+
       if (streamFinished) break;
     }
 
