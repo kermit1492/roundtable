@@ -358,7 +358,10 @@ async function streamModel(
               onToken(content);
             }
           } catch (e) {
-            // Ignore parse errors for partial JSON
+            // Re-throw rate limit and stream errors, ignore JSON parse errors
+            if (e instanceof Error && (e.message.startsWith('RATE_LIMIT:') || e.message.startsWith('Stream error:'))) {
+              throw e;
+            }
           }
         }
       }
