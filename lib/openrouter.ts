@@ -40,7 +40,7 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     tier: 'flagship',
     supportsFiles: true,
     supportedFileTypes: ['image', 'pdf'],
-    baseModel: 'grok-4.20-multi-agent-beta-0309',
+    baseModel: 'grok-4.20-beta-0309-reasoning',
   },
 
   // Fast tier
