@@ -72,8 +72,13 @@ const MODEL_NAMES: Record<string, string> = {
 // Max tokens for model responses
 const MAX_RESPONSE_TOKENS = 8192;
 
+// Map internal model IDs to actual API model IDs
+const XAI_MODEL_MAP: Record<string, string> = {
+  'xai/grok-4.20-multi-agent': 'grok-4.20-multi-agent-beta-0309',
+};
+
 function getActualModelId(modelId: string): string {
-  return modelId;
+  return XAI_MODEL_MAP[modelId] || modelId;
 }
 
 function getModelName(id: string): string {
