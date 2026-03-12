@@ -34,12 +34,12 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     supportedFileTypes: ['image', 'pdf'],
   },
   {
-    id: 'google/gemini-3.1-pro-preview',
-    name: 'Gemini 3.1 Pro',
-    color: '#4285f4',
+    id: 'xai/grok-4.20-multi-agent',
+    name: 'Grok 4.20',
+    color: '#1d9bf0',
     tier: 'flagship',
     supportsFiles: true,
-    supportedFileTypes: ['image', 'pdf', 'video', 'audio'],
+    supportedFileTypes: ['image', 'pdf'],
   },
 
   // Fast tier
@@ -78,6 +78,22 @@ export function createOpenRouterClient() {
       'X-Title': 'AI Roundtable',
     },
   });
+}
+
+export function createXaiClient() {
+  return new OpenAI({
+    baseURL: 'https://api.x.ai/v1',
+    apiKey: process.env.XAI_API_KEY,
+  });
+}
+
+export function isXaiModel(modelId: string): boolean {
+  return modelId.startsWith('xai/');
+}
+
+export function getXaiModelId(modelId: string): string {
+  // Strip 'xai/' prefix for direct xAI API calls
+  return modelId.replace('xai/', '');
 }
 
 export function getModelsWithFileSupport(fileType: string): string[] {

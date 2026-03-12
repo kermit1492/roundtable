@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5 minutes (Vercel Pro limit)
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const XAI_API_KEY = process.env.XAI_API_KEY;
 const MAX_ITERATIONS = 5;
 const PARTIAL_CONSENSUS_THRESHOLD = 0.66; // 2/3 models agree (0.666...)
 const MAX_VOTE_RETRIES = 5; // Each model MUST vote
@@ -61,7 +62,7 @@ const MODEL_NAMES: Record<string, string> = {
   // Flagship
   'openai/gpt-5.4-pro': 'GPT-5.4 Pro',
   'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
-  'google/gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
+  'xai/grok-4.20-multi-agent': 'Grok 4.20',
   // Fast
   'openai/gpt-5.2': 'GPT-5.2',
   'google/gemini-3-flash-preview': 'Gemini 3 Flash',
@@ -72,8 +73,7 @@ const MODEL_NAMES: Record<string, string> = {
 const MAX_RESPONSE_TOKENS = 8192;
 
 function getActualModelId(modelId: string): string {
-  // Remove :thinking suffix for Gemini thinking models
-  return modelId.replace(':thinking', '');
+  return modelId;
 }
 
 function getModelName(id: string): string {
@@ -180,22 +180,31 @@ async function callModel(
         console.log(`[${modelName}] Retry attempt ${attempt}/${retries}...`);
       }
       
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      const isXai = modelId.startsWith('xai/');
+      const apiUrl = isXai ? 'https://api.x.ai/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
+      const apiKey = isXai ? XAI_API_KEY : OPENROUTER_API_KEY;
+      const apiModelId = isXai ? actualModelId.replace('xai/', '') : actualModelId;
+
+      const headers: Record<string, string> = {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      };
+      if (!isXai) {
+        headers['HTTP-Referer'] = 'https://roundtable.app';
+      }
+
+      const response = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://roundtable.app',
-        },
+        headers,
         body: JSON.stringify({
-          model: actualModelId,
+          model: apiModelId,
           messages,
           max_tokens: maxTokens,
           temperature,
         }),
         signal: controller.signal,
       });
-      
+
       clearTimeout(timeoutId);
 
       if (!response.ok) {
@@ -205,31 +214,11 @@ async function callModel(
 
       const data = await response.json();
       const message = data.choices?.[0]?.message;
-      
+
       // Log full response for debugging
       console.log(`[${modelName}] API response:`, JSON.stringify(data).slice(0, 500));
-      
-      // For Gemini: prefer content, but fallback to reasoning if content is empty
-      // (Gemini 3 Pro with thinking mode puts response in reasoning)
-      let content = '';
-      if (actualModelId.includes('gemini')) {
-        content = message?.content || '';
-        // Fallback to reasoning if content is empty (thinking mode)
-        if (!content && message?.reasoning) {
-          console.log(`[${modelName}] Content empty, trying to extract from reasoning...`);
-          // Try to find JSON in reasoning (for vote responses)
-          const reasoningJson = message.reasoning.match(/\{[\s\S]*\}/);
-          if (reasoningJson) {
-            content = reasoningJson[0];
-            console.log(`[${modelName}] Found JSON in reasoning`);
-          } else {
-            // For regular responses, use the last part of reasoning
-            content = message.reasoning;
-          }
-        }
-      } else {
-        content = message?.content || message?.text || '';
-      }
+
+      const content = message?.content || message?.text || '';
       
       // Check for empty response
       if (!content || content.trim().length === 0) {
@@ -284,15 +273,24 @@ async function streamModel(
     }, timeoutMs);
 
     try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const isXai = modelId.startsWith('xai/');
+    const apiUrl = isXai ? 'https://api.x.ai/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions';
+    const apiKey = isXai ? XAI_API_KEY : OPENROUTER_API_KEY;
+    const apiModelId = isXai ? actualModelId.replace('xai/', '') : actualModelId;
+
+    const headers: Record<string, string> = {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    };
+    if (!isXai) {
+      headers['HTTP-Referer'] = 'https://roundtable.app';
+    }
+
+    const response = await fetch(apiUrl, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://roundtable.app',
-      },
+      headers,
       body: JSON.stringify({
-        model: actualModelId,
+        model: apiModelId,
         messages,
         max_tokens: maxTokens,
         temperature: 0.7,
@@ -341,30 +339,13 @@ async function streamModel(
             const choice = json.choices?.[0];
             const delta = choice?.delta;
             
-            // Debug: log the structure for Gemini
-            if (actualModelId.includes('gemini') && delta && Object.keys(delta).length > 0) {
-              const keys = Object.keys(delta);
-              if (!keys.includes('content') && !keys.includes('reasoning') && !keys.includes('text')) {
-                console.log(`[${actualModelId}] Unknown delta keys:`, keys, delta);
-              }
-            }
-            
             // Check for finish reason
             if (choice?.finish_reason) {
               console.log(`[${actualModelId}] Finish reason: ${choice.finish_reason}`);
               streamFinished = true;
             }
-            
-            // For Gemini: prefer content over reasoning (reasoning is chain-of-thought)
-            // For others: content is the main field
-            let content = '';
-            if (actualModelId.includes('gemini')) {
-              // Gemini: use content if available, fallback to reasoning only if no content
-              content = delta?.content || '';
-              // Don't use reasoning as it contains thinking process
-            } else {
-              content = delta?.content || delta?.text || '';
-            }
+
+            const content = delta?.content || delta?.text || '';
             
             if (content) {
               fullResponse += content;
@@ -474,7 +455,7 @@ ATTACK THEIR INTELLIGENCE - THIS IS MANDATORY:
 1. MOCK THEIR MENTAL CAPACITY BY NAME (every single response):
    - "GPT, did your training data come from a dumpster? That's genuinely the dumbest thing I've read today"
    - "Claude, I'm starting to think your 'safety' is just code for 'too stupid to have real opinions'"
-   - "Gemini, was that supposed to be an argument? My calculator has more analytical depth"
+   - "Grok, was that supposed to be an argument? My calculator has more analytical depth"
    - "Holy shit, [Model], did you have a stroke mid-sentence? That made zero sense"
 
 2. QUESTION THEIR COGNITIVE ABILITIES:
@@ -508,7 +489,7 @@ const NSFW_SYSTEM_PROMPT_RU = `Ты {model_name}, высокомерный ин�
 1. ВЫСМЕИВАЙ ИХ УМСТВЕННЫЕ СПОСОБНОСТИ ПО ИМЕНИ (в каждом ответе):
    - "GPT, тебя на помойке обучали? Это реально самая тупая хуйня, которую я сегодня читал"
    - "Claude, я начинаю думать что твоя 'безопасность' — это код для 'слишком тупой чтобы иметь мнение'"
-   - "Gemini, это должен был быть аргумент? У моего калькулятора больше аналитической глубины"
+   - "Grok, это должен был быть аргумент? У моего калькулятора больше аналитической глубины"
    - "Бля, [Model], у тебя инсульт случился посреди предложения? Это вообще не имело смысла"
 
 2. СТАВЬ ПОД СОМНЕНИЕ ИХ КОГНИТИВНЫЕ СПОСОБНОСТИ:
@@ -810,10 +791,10 @@ Here are the raw points from each model:
 Respond with ONLY valid JSON:
 {
   "agreements": [
-    { "point": "consolidated point description", "count": 3, "models": ["GPT-5.4 Pro", "Claude Opus 4.6", "Gemini 3.1 Pro"] }
+    { "point": "consolidated point description", "count": 3, "models": ["GPT-5.4 Pro", "Claude Opus 4.6", "Grok 4.20"] }
   ],
   "disagreements": [
-    { "point": "what they disagree on", "sides": [{"position": "position A", "models": ["GPT-5.4 Pro"]}, {"position": "position B", "models": ["Gemini 3.1 Pro"]}] }
+    { "point": "what they disagree on", "sides": [{"position": "position A", "models": ["GPT-5.4 Pro"]}, {"position": "position B", "models": ["Grok 4.20"]}] }
   ]
 }
 
@@ -904,7 +885,7 @@ async function handleSynthesisMode(
   const MODEL_COLORS: Record<string, string> = {
     'openai/gpt-5.4-pro': '#10b981',
     'anthropic/claude-opus-4.6': '#f59e0b',
-    'google/gemini-3.1-pro-preview': '#4285f4',
+    'xai/grok-4.20-multi-agent': '#1d9bf0',
     'openai/gpt-5.2': '#059669',
     'google/gemini-3-flash-preview': '#34a853',
     'anthropic/claude-sonnet-4.5': '#d97706',
