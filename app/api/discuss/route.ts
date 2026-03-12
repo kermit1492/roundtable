@@ -150,12 +150,23 @@ function createSSEStream() {
     start(c) { controller = c; },
   });
 
+  let closed = false;
+
   const send = (event: string, data: unknown) => {
-    const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-    controller.enqueue(encoder.encode(message));
+    if (closed) return;
+    try {
+      const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+      controller.enqueue(encoder.encode(message));
+    } catch {
+      closed = true;
+    }
   };
 
-  const close = () => { controller.close(); };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    try { controller.close(); } catch { /* already closed */ }
+  };
 
   return { stream, send, close };
 }
