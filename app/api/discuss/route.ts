@@ -5,7 +5,6 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5 minutes (Vercel Pro limit)
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const XAI_API_KEY = process.env.XAI_API_KEY;
 const MAX_ITERATIONS = 5;
 const PARTIAL_CONSENSUS_THRESHOLD = 0.66; // 2/3 models agree (0.666...)
 const MAX_VOTE_RETRIES = 5; // Each model MUST vote
@@ -62,7 +61,7 @@ const MODEL_NAMES: Record<string, string> = {
   // Flagship
   'openai/gpt-5.4-pro': 'GPT-5.4 Pro',
   'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
-  'xai/grok-4.20-multi-agent': 'Grok 4.20',
+  'x-ai/grok-4.20-multi-agent-beta': 'Grok 4.20 Multi Agent',
   // Fast
   'openai/gpt-5.2': 'GPT-5.2',
   'google/gemini-3-flash-preview': 'Gemini 3 Flash',
@@ -72,13 +71,8 @@ const MODEL_NAMES: Record<string, string> = {
 // Max tokens for model responses
 const MAX_RESPONSE_TOKENS = 8192;
 
-// Map internal model IDs to actual API model IDs
-const XAI_MODEL_MAP: Record<string, string> = {
-  'xai/grok-4.20-multi-agent': 'grok-4.20-multi-agent-beta-0309',
-};
-
 function getActualModelId(modelId: string): string {
-  return XAI_MODEL_MAP[modelId] || modelId;
+  return modelId;
 }
 
 function getModelName(id: string): string {
@@ -185,26 +179,15 @@ async function callModel(
         console.log(`[${modelName}] Retry attempt ${attempt}/${retries}...`);
       }
       
-      const isXai = modelId.startsWith('xai/');
-      const isMultiAgent = actualModelId.includes('multi-agent');
-      const apiUrl = isXai
-        ? (isMultiAgent ? 'https://api.x.ai/v1/responses' : 'https://api.x.ai/v1/chat/completions')
-        : 'https://openrouter.ai/api/v1/chat/completions';
-      const apiKey = isXai ? XAI_API_KEY : OPENROUTER_API_KEY;
-      const apiModelId = isXai ? actualModelId.replace('xai/', '') : actualModelId;
+      const apiUrl = 'https://openrouter.ai/api/v1/chat/completions';
 
       const headers: Record<string, string> = {
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://roundtable.app',
       };
-      if (!isXai) {
-        headers['HTTP-Referer'] = 'https://roundtable.app';
-      }
 
-      // Multi-agent uses Responses API format (input instead of messages, no max_tokens)
-      const body = isMultiAgent
-        ? { model: apiModelId, input: messages, reasoning: { effort: 'high' }, temperature }
-        : { model: apiModelId, messages, max_tokens: maxTokens, temperature };
+      const body = { model: actualModelId, messages, max_tokens: maxTokens, temperature };
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -225,17 +208,8 @@ async function callModel(
       // Log full response for debugging
       console.log(`[${modelName}] API response:`, JSON.stringify(data).slice(0, 500));
 
-      // Multi-agent: extract from output[].content[].text
-      // Chat completions: extract from choices[].message.content
-      let content = '';
-      if (isMultiAgent) {
-        const outputMsg = data.output?.find((o: { type: string }) => o.type === 'message');
-        const textPart = outputMsg?.content?.find((c: { type: string }) => c.type === 'output_text');
-        content = textPart?.text || '';
-      } else {
-        const message = data.choices?.[0]?.message;
-        content = message?.content || message?.text || '';
-      }
+      const message = data.choices?.[0]?.message;
+      const content = message?.content || message?.text || '';
       
       // Check for empty response
       if (!content || content.trim().length === 0) {
@@ -290,26 +264,15 @@ async function streamModel(
     }, timeoutMs);
 
     try {
-    const isXai = modelId.startsWith('xai/');
-    const isMultiAgent = actualModelId.includes('multi-agent');
-    const apiUrl = isXai
-      ? (isMultiAgent ? 'https://api.x.ai/v1/responses' : 'https://api.x.ai/v1/chat/completions')
-      : 'https://openrouter.ai/api/v1/chat/completions';
-    const apiKey = isXai ? XAI_API_KEY : OPENROUTER_API_KEY;
-    const apiModelId = isXai ? actualModelId.replace('xai/', '') : actualModelId;
+    const apiUrl = 'https://openrouter.ai/api/v1/chat/completions';
 
     const headers: Record<string, string> = {
-      'Authorization': `Bearer ${apiKey}`,
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
       'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://roundtable.app',
     };
-    if (!isXai) {
-      headers['HTTP-Referer'] = 'https://roundtable.app';
-    }
 
-    // Multi-agent uses Responses API format
-    const body = isMultiAgent
-      ? { model: apiModelId, input: messages, reasoning: { effort: 'high' }, temperature: 0.7, stream: true }
-      : { model: apiModelId, messages, max_tokens: maxTokens, temperature: 0.7, stream: true };
+    const body = { model: actualModelId, messages, max_tokens: maxTokens, temperature: 0.7, stream: true };
 
     const response = await fetch(apiUrl, {
       method: 'POST',
@@ -356,34 +319,19 @@ async function streamModel(
           try {
             const json = JSON.parse(line.slice(6));
 
-            if (isMultiAgent) {
-              // Responses API streaming: event type in json.type
-              if (json.type === 'response.output_text.delta') {
-                const content = json.delta || '';
-                if (content) {
-                  fullResponse += content;
-                  onToken(content);
-                }
-              } else if (json.type === 'response.completed') {
-                console.log(`[${actualModelId}] Multi-agent response completed`);
-                streamFinished = true;
-              }
-            } else {
-              // Chat completions streaming
-              const choice = json.choices?.[0];
-              const delta = choice?.delta;
+            const choice = json.choices?.[0];
+            const delta = choice?.delta;
 
-              if (choice?.finish_reason) {
-                console.log(`[${actualModelId}] Finish reason: ${choice.finish_reason}`);
-                streamFinished = true;
-              }
+            if (choice?.finish_reason) {
+              console.log(`[${actualModelId}] Finish reason: ${choice.finish_reason}`);
+              streamFinished = true;
+            }
 
-              const content = delta?.content || delta?.text || '';
+            const content = delta?.content || delta?.text || '';
 
-              if (content) {
-                fullResponse += content;
-                onToken(content);
-              }
+            if (content) {
+              fullResponse += content;
+              onToken(content);
             }
           } catch (e) {
             // Ignore parse errors for partial JSON
@@ -825,10 +773,10 @@ Here are the raw points from each model:
 Respond with ONLY valid JSON:
 {
   "agreements": [
-    { "point": "consolidated point description", "count": 3, "models": ["GPT-5.4 Pro", "Claude Opus 4.6", "Grok 4.20"] }
+    { "point": "consolidated point description", "count": 3, "models": ["GPT-5.4 Pro", "Claude Opus 4.6", "Grok 4.20 Multi Agent"] }
   ],
   "disagreements": [
-    { "point": "what they disagree on", "sides": [{"position": "position A", "models": ["GPT-5.4 Pro"]}, {"position": "position B", "models": ["Grok 4.20"]}] }
+    { "point": "what they disagree on", "sides": [{"position": "position A", "models": ["GPT-5.4 Pro"]}, {"position": "position B", "models": ["Grok 4.20 Multi Agent"]}] }
   ]
 }
 
@@ -919,7 +867,7 @@ async function handleSynthesisMode(
   const MODEL_COLORS: Record<string, string> = {
     'openai/gpt-5.4-pro': '#10b981',
     'anthropic/claude-opus-4.6': '#f59e0b',
-    'xai/grok-4.20-multi-agent': '#1d9bf0',
+    'x-ai/grok-4.20-multi-agent-beta': '#1d9bf0',
     'openai/gpt-5.2': '#059669',
     'google/gemini-3-flash-preview': '#34a853',
     'anthropic/claude-sonnet-4.5': '#d97706',

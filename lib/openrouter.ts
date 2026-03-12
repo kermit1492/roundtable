@@ -34,13 +34,12 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     supportedFileTypes: ['image', 'pdf'],
   },
   {
-    id: 'xai/grok-4.20-multi-agent',
-    name: 'Grok 4.20',
+    id: 'x-ai/grok-4.20-multi-agent-beta',
+    name: 'Grok 4.20 Multi Agent',
     color: '#1d9bf0',
     tier: 'flagship',
     supportsFiles: true,
     supportedFileTypes: ['image', 'pdf'],
-    baseModel: 'grok-4.20-multi-agent-beta-0309',
   },
 
   // Fast tier
@@ -79,22 +78,6 @@ export function createOpenRouterClient() {
       'X-Title': 'AI Roundtable',
     },
   });
-}
-
-export function createXaiClient() {
-  return new OpenAI({
-    baseURL: 'https://api.x.ai/v1',
-    apiKey: process.env.XAI_API_KEY,
-  });
-}
-
-export function isXaiModel(modelId: string): boolean {
-  return modelId.startsWith('xai/');
-}
-
-export function getXaiModelId(modelId: string): string {
-  // Strip 'xai/' prefix for direct xAI API calls
-  return modelId.replace('xai/', '');
 }
 
 export function getModelsWithFileSupport(fileType: string): string[] {
