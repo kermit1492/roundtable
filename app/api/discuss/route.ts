@@ -319,6 +319,19 @@ async function streamModel(
           try {
             const json = JSON.parse(line.slice(6));
 
+            // Handle inline errors (e.g. rate limits returned inside stream)
+            if (json.error) {
+              const errMsg = typeof json.error.message === 'string' ? json.error.message : JSON.stringify(json.error);
+              const retryMatch = errMsg.match(/after\s+([\d.]+)\s*seconds/);
+              const retryAfter = retryMatch ? Math.ceil(parseFloat(retryMatch[1])) : 0;
+              console.error(`[${actualModelId}] Stream inline error: ${errMsg.slice(0, 200)}`);
+              if (retryAfter > 0 && attempt < MAX_RETRIES) {
+                console.log(`[${actualModelId}] Rate limited, will retry after ${retryAfter}s...`);
+                throw new Error(`RATE_LIMIT:${retryAfter}`);
+              }
+              throw new Error(`Stream error: ${errMsg.slice(0, 200)}`);
+            }
+
             const choice = json.choices?.[0];
             const delta = choice?.delta;
 
@@ -349,6 +362,15 @@ async function streamModel(
     const errMsg = error instanceof Error ? error.message : String(error);
     const causeMsg = (error instanceof Error && error.cause instanceof Error) ? error.cause.message : '';
     const fullMsg = errMsg + ' ' + causeMsg;
+    // Handle rate limit with specific delay
+    const rateLimitMatch = errMsg.match(/^RATE_LIMIT:(\d+)$/);
+    if (rateLimitMatch && attempt < MAX_RETRIES) {
+      const waitSec = Math.min(parseInt(rateLimitMatch[1]), 120); // cap at 2 min
+      console.log(`[${actualModelId}] Rate limit retry: waiting ${waitSec}s (attempt ${attempt + 1})...`);
+      await new Promise(r => setTimeout(r, waitSec * 1000));
+      continue;
+    }
+
     const isRetryable = !timedOut && (
                         fullMsg.includes('other side closed') ||
                         fullMsg.includes('UND_ERR_SOCKET') ||
