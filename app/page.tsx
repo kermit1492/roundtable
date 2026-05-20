@@ -619,7 +619,33 @@ export default function Home() {
     if (savedSynthesis === 'true') {
       setSynthesisMode(true);
     }
+    // Load previously saved discussion thread so models retain memory across sessions.
+    // Schema-versioned key so we can change shape later without colliding with old data.
+    try {
+      const savedThread = localStorage.getItem('roundtable-thread-v1');
+      if (savedThread) {
+        const parsed = JSON.parse(savedThread) as DiscussionEntry[];
+        if (Array.isArray(parsed) && parsed.length > 0) setThread(parsed);
+      }
+    } catch (e) {
+      console.warn('Failed to restore thread from storage:', e);
+    }
   }, []);
+
+  // Persist thread to localStorage whenever it changes.
+  // Skips writes when empty (instead removes the key) so a "+ New thread" actually clears storage.
+  useEffect(() => {
+    try {
+      if (thread.length === 0) {
+        localStorage.removeItem('roundtable-thread-v1');
+      } else {
+        localStorage.setItem('roundtable-thread-v1', JSON.stringify(thread));
+      }
+    } catch (e) {
+      // QuotaExceeded or storage disabled — fail silently, in-memory thread still works for this session.
+      console.warn('Failed to persist thread:', e);
+    }
+  }, [thread]);
 
   const toggleNsfwMode = () => {
     setNsfwMode(prev => {
@@ -1323,13 +1349,15 @@ export default function Home() {
       allVotingResults: {},
     });
 
-    const prev = thread.length > 0 ? thread[thread.length - 1] : null;
-    const previousDiscussion = isFollowUp && prev
-      ? {
-          question: prev.question,
-          consensus: prev.consensusResult?.synthesis,
-          responses: prev.finalResponses,
-        }
+    // Build thread context: when continuing a conversation, send the full prior history
+    // (capped server-side to MAX_THREAD_ROUNDS entries). Each entry includes the question,
+    // every model's final response, and the consensus synthesis if reached.
+    const threadForApi = isFollowUp
+      ? thread.map(e => ({
+          question: e.question,
+          finalResponses: e.finalResponses,
+          consensus: e.consensusResult?.synthesis,
+        }))
       : undefined;
 
     try {
@@ -1339,7 +1367,7 @@ export default function Home() {
         body: JSON.stringify({
           question: currentQuestion,
           models: selectedModels,
-          previousDiscussion,
+          thread: threadForApi,
           file: file || undefined,
           nsfwMode,
           synthesisMode,

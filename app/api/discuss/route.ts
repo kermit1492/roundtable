@@ -18,16 +18,87 @@ interface FileAttachment {
   name: string;
 }
 
-interface PreviousDiscussion {
+interface ThreadEntry {
   question: string;
+  finalResponses: Record<string, string>;
   consensus?: string;
-  responses: Record<string, string>;
+}
+
+// Maximum number of past thread entries to include verbatim. Older entries get summarized in a stub.
+const MAX_THREAD_ROUNDS = 6;
+
+/**
+ * Build a multi-turn `messages` array for a specific model.
+ *
+ * For each prior round, the model's own answer is included as an `assistant` message,
+ * and other models' answers from the previous round are placed in the next `user` message.
+ * This gives each model proper "memory" of its own past statements while still being
+ * aware of what colleagues said.
+ *
+ * If the thread is longer than MAX_THREAD_ROUNDS, older rounds are dropped with a brief
+ * note. If at some point we want richer behavior, this is where to plug in a summarizer.
+ */
+function buildModelMessages(
+  modelId: string,
+  modelNameFn: (id: string) => string,
+  systemPrompt: string,
+  thread: ThreadEntry[] | undefined,
+  currentQuestion: string,
+  currentFileContext: string,
+): { role: string; content: string }[] {
+  const messages: { role: string; content: string }[] = [
+    { role: 'system', content: systemPrompt },
+  ];
+
+  const t: ThreadEntry[] = thread ? thread.slice(-MAX_THREAD_ROUNDS) : [];
+  const dropped = thread ? thread.length - t.length : 0;
+
+  const formatOthers = (entry: ThreadEntry): string =>
+    Object.entries(entry.finalResponses)
+      .filter(([id]) => id !== modelId)
+      .map(([id, resp]) => `${modelNameFn(id)} said:\n${resp}`)
+      .join('\n\n---\n\n');
+
+  for (let i = 0; i < t.length; i++) {
+    let userContent: string;
+    if (i === 0) {
+      const droppedNote = dropped > 0
+        ? `[Earlier in this conversation we discussed ${dropped} other topic${dropped > 1 ? 's' : ''}. We pick up here.]\n\n`
+        : '';
+      userContent = droppedNote + t[i].question;
+    } else {
+      const prev = t[i - 1];
+      userContent =
+        `Your colleagues' answers to the previous question:\n\n${formatOthers(prev)}\n\n` +
+        (prev.consensus ? `Group conclusion: ${prev.consensus}\n\n` : '') +
+        `Follow-up question: ${t[i].question}`;
+    }
+    messages.push({ role: 'user', content: userContent });
+
+    const myAnswer = t[i].finalResponses[modelId];
+    if (myAnswer) messages.push({ role: 'assistant', content: myAnswer });
+  }
+
+  // Current turn
+  let currentUser: string;
+  if (t.length > 0) {
+    const last = t[t.length - 1];
+    currentUser =
+      `Your colleagues' answers to the previous question:\n\n${formatOthers(last)}\n\n` +
+      (last.consensus ? `Group conclusion: ${last.consensus}\n\n` : '') +
+      `Follow-up question: ${currentFileContext}${currentQuestion}`;
+  } else {
+    currentUser = currentFileContext + currentQuestion;
+  }
+  messages.push({ role: 'user', content: currentUser });
+
+  return messages;
 }
 
 interface DiscussionRequest {
   question: string;
   models: string[];
-  previousDiscussion?: PreviousDiscussion;
+  thread?: ThreadEntry[];
   file?: FileAttachment;
   nsfwMode?: boolean;
   synthesisMode?: boolean;
@@ -1427,7 +1498,7 @@ function parseSynthesisReport(
 
 export async function POST(request: NextRequest) {
   const body: DiscussionRequest = await request.json();
-  const { question, models: requestedModels, previousDiscussion, file, nsfwMode, synthesisMode } = body;
+  const { question, models: requestedModels, thread, file, nsfwMode, synthesisMode } = body;
 
   if (!question || !requestedModels || requestedModels.length < 2) {
     return new Response(JSON.stringify({ error: 'Need question and at least 2 models' }), { status: 400 });
@@ -1495,28 +1566,6 @@ export async function POST(request: NextRequest) {
         // All models respond in parallel
         const modelPromises = activeModels.map(async (modelId) => {
           const modelName = getModelName(modelId);
-          
-          let userPrompt: string;
-          if (isFirstIteration) {
-            userPrompt = file 
-              ? `[Attached file: ${file.name}]\n\n${question}`
-              : question;
-            
-            if (previousDiscussion) {
-              const prevResponses = Object.entries(previousDiscussion.responses)
-                .map(([id, resp]) => `${getModelName(id)}: ${resp}`)
-                .join('\n\n');
-              userPrompt = `Previous discussion about "${previousDiscussion.question}":\n${prevResponses}\n\n${previousDiscussion.consensus ? `Previous consensus: ${previousDiscussion.consensus}\n\n` : ''}New follow-up question: ${question}`;
-            }
-          } else {
-            // Show OTHER models' responses from previous iteration
-            const otherResponses = Object.entries(allResponses[iteration - 1])
-              .filter(([id]) => id !== modelId)
-              .map(([id, resp]) => `${getModelName(id)}:\n${resp}`)
-              .join('\n\n---\n\n');
-            
-            userPrompt = `Original question: ${question}\n\nYour colleagues have shared their views:\n\n${otherResponses}\n\nConsider their perspectives. Do you agree? Disagree? Refine your position if needed.`;
-          }
 
           // Build system prompt based on NSFW mode
           let systemPrompt: string;
@@ -1536,10 +1585,24 @@ export async function POST(request: NextRequest) {
             systemPrompt = SYSTEM_PROMPT.replace(/{model_name}/g, modelName);
           }
 
-          const messages = [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ];
+          let messages: { role: string; content: string }[];
+          if (isFirstIteration) {
+            // First iteration of CURRENT discussion — include thread history (memory of prior discussions).
+            const fileContext = file ? `[Attached file: ${file.name}]\n\n` : '';
+            messages = buildModelMessages(modelId, getModelName, systemPrompt, thread, question, fileContext);
+          } else {
+            // Subsequent iteration within the same discussion: show others' answers from previous iteration.
+            const otherResponses = Object.entries(allResponses[iteration - 1])
+              .filter(([id]) => id !== modelId)
+              .map(([id, resp]) => `${getModelName(id)}:\n${resp}`)
+              .join('\n\n---\n\n');
+
+            const userPrompt = `Original question: ${question}\n\nYour colleagues have shared their views:\n\n${otherResponses}\n\nConsider their perspectives. Do you agree? Disagree? Refine your position if needed.`;
+            messages = [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ];
+          }
 
           try {
             const response = await streamModel(
