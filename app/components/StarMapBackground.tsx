@@ -93,6 +93,14 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
     let transitionT = 1;
     let lastSeenTick = modeRequestRef.current.tick;
 
+    // ===== Organic motion =====
+    // Slow accumulated rotation about screen centre — makes the network feel like it drifts.
+    let rotation = 0;
+    // Periodic "thunderclap" wave events: scheduled per-node activations that fire over ~1-2s.
+    // Creates the impression of a discharge crossing the network.
+    const flashQueue: { nodeIdx: number; fireAt: number }[] = [];
+    let nextFlashTime = 5; // first wave 5 seconds in
+
     // ===== Background offscreen cache =====
     const bg = document.createElement('canvas');
     const bgCtx = bg.getContext('2d')!;
@@ -248,6 +256,30 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
       return `rgba(255, 145, 90, ${alpha})`;
     }
 
+    /**
+     * Schedules per-node activations that propagate outward from an epicenter at a given speed.
+     * Looks like a wave/flash crossing the whole network. In synthesis the epicenter is fixed
+     * at the focal point; otherwise it's a random location.
+     */
+    function triggerFlashWave(tSec: number) {
+      let ex: number, ey: number;
+      if (currentMode === 'synthesis') {
+        ex = W * 0.5; ey = H * 0.52;
+      } else {
+        ex = Math.random() * W; ey = Math.random() * H;
+      }
+      const speed =
+        currentMode === 'idle' ? 700 :
+        currentMode === 'discussion' ? 1100 :
+        950;
+      for (let i = 0; i < nodes.length; i++) {
+        const dx = nodes[i].current.x - ex;
+        const dy = nodes[i].current.y - ey;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        flashQueue.push({ nodeIdx: i, fireAt: tSec + dist / speed });
+      }
+    }
+
     function modePulseHue(): 'cool' | 'hot' {
       return currentMode === 'synthesis' ? 'hot' : 'cool';
     }
@@ -303,9 +335,46 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
         nd.current.y = nd.from.y + (tgt.y - nd.from.y) * k;
       }
 
+      // --- Organic motion: rotation, breathing, periodic flash waves ---
+      const rotSpeed =
+        currentMode === 'idle' ? 0.018 :
+        currentMode === 'discussion' ? 0.04 :
+        0.09;
+      rotation += rotSpeed * dt;
+
+      const breathPeriod = currentMode === 'idle' ? 6 : currentMode === 'discussion' ? 4 : 2.5;
+      const breath = 1 + Math.sin((now / 1000) * (Math.PI * 2 / breathPeriod)) * 0.025;
+
+      const tSec = now / 1000;
+      if (tSec > nextFlashTime) {
+        const period =
+          currentMode === 'idle' ? 16 :
+          currentMode === 'discussion' ? 9 :
+          6;
+        nextFlashTime = tSec + period + Math.random() * 3;
+        triggerFlashWave(tSec);
+      }
+
+      // Apply scheduled flash activations whose time has come
+      for (let i = flashQueue.length - 1; i >= 0; i--) {
+        if (tSec >= flashQueue[i].fireAt) {
+          const idx = flashQueue[i].nodeIdx;
+          nodes[idx].activation = Math.max(nodes[idx].activation, 1.2);
+          flashQueue.splice(i, 1);
+        }
+      }
+
       ctx.globalAlpha = opacity;
       ctx.clearRect(0, 0, W, H);
       ctx.drawImage(bg, 0, 0, W, H);
+
+      // Everything that follows gets rotated + scaled about the network's centre,
+      // so the whole sky feels like it slowly turns and breathes.
+      ctx.save();
+      ctx.translate(W * 0.5, H * 0.52);
+      ctx.rotate(rotation);
+      ctx.scale(breath, breath);
+      ctx.translate(-W * 0.5, -H * 0.52);
 
       if (currentMode === 'synthesis' && transitionT > 0.2) {
         const hotAlpha = 0.30 * (transitionT - 0.2) / 0.8;
@@ -422,6 +491,9 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
         ctx.fillStyle = coreG;
         ctx.fillRect(W * 0.5 - coreR, H * 0.52 - coreR, coreR * 2, coreR * 2);
       }
+
+      // Restore the world transform applied at the start of the drawing block.
+      ctx.restore();
 
       ctx.globalAlpha = 1;
       rafId = requestAnimationFrame(tick);
