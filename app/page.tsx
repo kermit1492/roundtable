@@ -6,14 +6,9 @@ import 'katex/dist/katex.min.css';
 import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, generateSynthesisDOCX, generateSynthesisLaTeX, type ReportData, type ModelResponse, type SynthesisReportData } from './components/PDFReport';
 
 const AVAILABLE_MODELS = [
-  // Flagship tier
-  { id: 'openai/gpt-5.4-pro', name: 'GPT-5.4 Pro', color: '#10b981', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
-  { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6', color: '#f59e0b', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
-  { id: 'x-ai/grok-4.20-multi-agent-beta', name: 'Grok 4.20 Multi Agent', color: '#1d9bf0', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
-  // Fast tier
-  { id: 'openai/gpt-5.2', name: 'GPT-5.2', color: '#059669', tier: 'fast', supportsFiles: true, fileTypes: ['image', 'pdf'] },
-  { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', color: '#34a853', tier: 'fast', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
-  { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', color: '#d97706', tier: 'fast', supportsFiles: true, fileTypes: ['image', 'pdf'] },
+  { id: 'openai/gpt-5.5-pro', name: 'GPT-5.5 Pro', color: '#10b981', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
+  { id: 'anthropic/claude-opus-4.7', name: 'Claude Opus 4.7', color: '#f59e0b', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
+  { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash', color: '#34a853', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
 ];
 
 const PRESETS = {
@@ -21,13 +16,7 @@ const PRESETS = {
     name: 'Expert Panel',
     description: 'Top SOTA models for serious tasks',
     icon: '🎓',
-    models: ['openai/gpt-5.4-pro', 'anthropic/claude-opus-4.6', 'x-ai/grok-4.20-multi-agent-beta'],
-  },
-  speed: {
-    name: 'Speed Round',
-    description: 'Fast models for brainstorming',
-    icon: '⚡',
-    models: ['openai/gpt-5.2', 'google/gemini-3-flash-preview', 'anthropic/claude-sonnet-4.5'],
+    models: ['openai/gpt-5.5-pro', 'anthropic/claude-opus-4.7', 'google/gemini-3.5-flash'],
   },
 };
 
@@ -1454,7 +1443,6 @@ export default function Home() {
 
   const modelsByTier = {
     flagship: AVAILABLE_MODELS.filter(m => m.tier === 'flagship'),
-    fast: AVAILABLE_MODELS.filter(m => m.tier === 'fast'),
   };
 
   const hasActiveThread = thread.length > 0 || discussion.status !== 'idle';
@@ -1673,30 +1661,7 @@ export default function Home() {
 
               <div className="flex-1 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium w-20" style={{ color: 'var(--text-tertiary)' }}>Flagship</span>
                   {modelsByTier.flagship.map(model => {
-                    const disabled = file && (!model.supportsFiles || !model.fileTypes.includes(file.type));
-                    return (
-                      <button
-                        key={model.id}
-                        onClick={() => toggleModel(model.id)}
-                        disabled={discussion.status === 'running'}
-                        className={`px-3 py-1.5 rounded-full text-sm font-medium border ${disabled ? 'opacity-40' : ''}`}
-                        style={{
-                          backgroundColor: selectedModels.includes(model.id) ? model.color : 'var(--bg-secondary)',
-                          color: selectedModels.includes(model.id) ? '#fff' : 'var(--text-secondary)',
-                          borderColor: selectedModels.includes(model.id) ? model.color : 'var(--border-primary)',
-                        }}
-                      >
-                        {model.name}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium w-20" style={{ color: 'var(--text-tertiary)' }}>Fast</span>
-                  {modelsByTier.fast.map(model => {
                     const disabled = file && (!model.supportsFiles || !model.fileTypes.includes(file.type));
                     return (
                       <button

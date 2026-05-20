@@ -58,14 +58,9 @@ interface VoteResult {
 }
 
 const MODEL_NAMES: Record<string, string> = {
-  // Flagship
-  'openai/gpt-5.4-pro': 'GPT-5.4 Pro',
-  'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
-  'x-ai/grok-4.20-multi-agent-beta': 'Grok 4.20 Multi Agent',
-  // Fast
-  'openai/gpt-5.2': 'GPT-5.2',
-  'google/gemini-3-flash-preview': 'Gemini 3 Flash',
-  'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
+  'openai/gpt-5.5-pro': 'GPT-5.5 Pro',
+  'anthropic/claude-opus-4.7': 'Claude Opus 4.7',
+  'google/gemini-3.5-flash': 'Gemini 3.5 Flash',
 };
 
 // Max tokens for model responses
@@ -872,20 +867,20 @@ async function analyzePointsWithSonnet(
       { role: 'user', content: ANALYZE_POINTS_PROMPT.replace('{points_data}', JSON.stringify(pointsData, null, 2)) },
     ];
     
-    const response = await callModel('anthropic/claude-sonnet-4.5', messages, 1500, 0.2, 2);
-    
+    const response = await callModel('google/gemini-3.5-flash', messages, 1500, 0.2, 2);
+
     // Parse JSON
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       const jsonStr = sanitizeJsonString(jsonMatch[0]);
-      
+
       const parsed = JSON.parse(jsonStr) as AnalyzedPoints;
-      console.log('[Sonnet] Points analyzed successfully:', parsed.agreements.length, 'agreements,', parsed.disagreements.length, 'disagreements');
+      console.log('[Judge] Points analyzed successfully:', parsed.agreements.length, 'agreements,', parsed.disagreements.length, 'disagreements');
       send('analyzing_points', { status: 'complete' });
       return parsed;
     }
   } catch (error) {
-    console.error('[Sonnet] Failed to analyze points:', error);
+    console.error('[Judge] Failed to analyze points:', error);
     send('analyzing_points', { status: 'failed' });
   }
   
@@ -901,12 +896,9 @@ async function handleSynthesisMode(
   file?: FileAttachment
 ) {
   const MODEL_COLORS: Record<string, string> = {
-    'openai/gpt-5.4-pro': '#10b981',
-    'anthropic/claude-opus-4.6': '#f59e0b',
-    'x-ai/grok-4.20-multi-agent-beta': '#1d9bf0',
-    'openai/gpt-5.2': '#059669',
-    'google/gemini-3-flash-preview': '#34a853',
-    'anthropic/claude-sonnet-4.5': '#d97706',
+    'openai/gpt-5.5-pro': '#10b981',
+    'anthropic/claude-opus-4.7': '#f59e0b',
+    'google/gemini-3.5-flash': '#34a853',
   };
 
   send('synthesis_mode_started', { question, models: models.map(m => getModelName(m)) });

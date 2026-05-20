@@ -14,58 +14,31 @@ export interface ModelConfig {
   reasoningEnabled?: boolean;
 }
 
-// SOTA Models - March 2026
+// SOTA Models - May 2026
 export const AVAILABLE_MODELS: ModelConfig[] = [
-  // Flagship tier
   {
-    id: 'openai/gpt-5.4-pro',
-    name: 'GPT-5.4 Pro',
+    id: 'openai/gpt-5.5-pro',
+    name: 'GPT-5.5 Pro',
     color: '#10b981',
     tier: 'flagship',
     supportsFiles: true,
     supportedFileTypes: ['image', 'pdf'],
   },
   {
-    id: 'anthropic/claude-opus-4.6',
-    name: 'Claude Opus 4.6',
+    id: 'anthropic/claude-opus-4.7',
+    name: 'Claude Opus 4.7',
     color: '#f59e0b',
     tier: 'flagship',
     supportsFiles: true,
     supportedFileTypes: ['image', 'pdf'],
   },
   {
-    id: 'x-ai/grok-4.20-multi-agent-beta',
-    name: 'Grok 4.20 Multi Agent',
-    color: '#1d9bf0',
+    id: 'google/gemini-3.5-flash',
+    name: 'Gemini 3.5 Flash',
+    color: '#34a853',
     tier: 'flagship',
     supportsFiles: true,
-    supportedFileTypes: ['image', 'pdf'],
-  },
-
-  // Fast tier
-  {
-    id: 'openai/gpt-5.2',
-    name: 'GPT-5.2',
-    color: '#059669',
-    tier: 'fast',
-    supportsFiles: true,
-    supportedFileTypes: ['image', 'pdf'],
-  },
-  {
-    id: 'google/gemini-3-flash-preview',
-    name: 'Gemini 3 Flash',
-    color: '#34a853',
-    tier: 'fast',
-    supportsFiles: true,
     supportedFileTypes: ['image', 'pdf', 'video', 'audio'],
-  },
-  {
-    id: 'anthropic/claude-sonnet-4.5',
-    name: 'Claude Sonnet 4.5',
-    color: '#d97706',
-    tier: 'fast',
-    supportsFiles: true,
-    supportedFileTypes: ['image', 'pdf'],
   },
 ];
 
