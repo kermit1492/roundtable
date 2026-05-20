@@ -34,6 +34,8 @@ interface Node {
   twinkles: boolean;
   twinklePhase: number;
   twinkleSpeed: number;
+  /** Transient flash activation (0..~1.2). Set by flash-wave events, decays each frame. */
+  activation: number;
 }
 interface Edge { a: number; b: number; perpFrac: number; opacity: number; }
 interface Pulse { edgeIdx: number; t: number; speed: number; dir: 1 | -1; hue: 'cool' | 'hot'; }
@@ -163,6 +165,7 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
           twinkles: Math.random() < 0.25,
           twinklePhase: Math.random() * Math.PI * 2,
           twinkleSpeed: 0.3 + Math.random() * 0.8,
+          activation: 0,
         });
       }
 
@@ -333,6 +336,8 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
         const tgt = nd.positions[currentMode];
         nd.current.x = nd.from.x + (tgt.x - nd.from.x) * k;
         nd.current.y = nd.from.y + (tgt.y - nd.from.y) * k;
+        // Decay transient flash activation so it visibly fades after the wave passes.
+        if (nd.activation > 0) nd.activation *= Math.exp(-dt * 1.6);
       }
 
       // --- Organic motion: rotation, breathing, periodic flash waves ---
@@ -412,8 +417,10 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
       for (let n = 0; n < nodes.length; n++) {
         const nd = nodes[n];
         const bx = nd.current.x, by = nd.current.y;
-        const haloR = Math.max(2.5, nd.size * 5);
-        ctx.globalAlpha = nd.brightness * 0.7 * opacity;
+        // `act` clamps flash activation to a visible boost for halo opacity, size, and a brighter core.
+        const act = Math.min(1, nd.activation);
+        const haloR = Math.max(2.5, nd.size * 5) * (1 + act * 0.8);
+        ctx.globalAlpha = (nd.brightness * 0.7 + act * 0.55) * opacity;
         ctx.drawImage(HALO_TEX, bx - haloR, by - haloR, haloR * 2, haloR * 2);
         if (currentMode === 'synthesis' && transitionT > 0.5) {
           ctx.globalCompositeOperation = 'source-atop';
@@ -424,12 +431,12 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
           ctx.globalCompositeOperation = 'source-over';
         }
         ctx.globalAlpha = opacity;
-        let twS = nd.size;
+        let twS = nd.size * (1 + act * 0.9);
         if (nd.twinkles) {
           const ph = Math.sin((now / 1000) * nd.twinkleSpeed * Math.PI * 2 + nd.twinklePhase);
-          if (ph > 0.6) twS = nd.size * (1 + (ph - 0.6) / 0.4 * 1.6);
+          if (ph > 0.6) twS = nd.size * (1 + (ph - 0.6) / 0.4 * 1.6) * (1 + act * 0.9);
         }
-        ctx.fillStyle = `rgba(255, 255, 255, ${(0.7 + nd.brightness * 0.3) * opacity})`;
+        ctx.fillStyle = `rgba(255, 255, 255, ${(0.7 + nd.brightness * 0.3 + act * 0.2) * opacity})`;
         ctx.beginPath();
         ctx.arc(bx, by, twS, 0, Math.PI * 2);
         ctx.fill();
