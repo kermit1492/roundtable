@@ -63,12 +63,21 @@
   --error-text: #f87171;
 }
 
-body {
+/* HTML keeps a fallback background per theme so the page renders correctly even
+   before the starmap canvas mounts. The starmap is fixed at z-index: 0 over this. */
+html {
   background: var(--bg-primary);
+  transition: background-color 0.3s ease;
+}
+
+body {
+  /* Transparent so the StarMapBackground canvas (z-index: 0, position: fixed) shows through.
+     Theme variables still drive cards, header, text. */
+  background: transparent;
   color: var(--text-primary);
   min-height: 100vh;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  transition: background-color 0.3s ease, color 0.3s ease;
+  transition: color 0.3s ease;
 }
 
 /* Clean scrollbar */

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { generatePDF, downloadPDF, generateDOCX, downloadDOCX, generateSynthesisDOCX, generateSynthesisLaTeX, type ReportData, type ModelResponse, type SynthesisReportData } from './components/PDFReport';
+import StarMapBackground, { type StarMapMode } from './components/StarMapBackground';
 
 const AVAILABLE_MODELS = [
   { id: 'openai/gpt-5.5-pro', name: 'GPT-5.5 Pro', color: '#10b981', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
@@ -1475,8 +1476,24 @@ export default function Home() {
 
   const hasActiveThread = thread.length > 0 || discussion.status !== 'idle';
 
+  // Starmap mode follows real app state:
+  //  - Not running → idle (gentle balanced network)
+  //  - Running + synthesis → focused funnel mode
+  //  - Running otherwise → sprawling discussion mode
+  const networkMode: StarMapMode =
+    discussion.status !== 'running' ? 'idle' :
+    synthesisMode ? 'synthesis' : 'discussion';
+
+  // Per-theme opacity so the starmap doesn't overpower lighter themes.
+  const starmapOpacity =
+    theme === 'dark' ? 1 :
+    theme === 'sepia' ? 0.45 :
+    0.35; // light
+
   return (
-    <main className="min-h-screen transition-colors" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <>
+      <StarMapBackground mode={networkMode} opacity={starmapOpacity} />
+      <main className="min-h-screen transition-colors relative" style={{ backgroundColor: 'transparent' }}>
       {/* Header */}
       <header
         className="border-b sticky top-0 z-10"
@@ -2300,5 +2317,6 @@ export default function Home() {
         )}
       </div>
     </main>
+    </>
   );
 }
