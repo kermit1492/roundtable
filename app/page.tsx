@@ -684,7 +684,11 @@ export default function Home() {
   useEffect(() => {
     if (discussion.status !== 'running') return;
 
-    const STUCK_THRESHOLD_MS = 120000; // 2 minutes
+    // 5 minutes — matches Vercel's function max-duration. Discussion votes can think 60-180s
+    // and synthesis phases (drafts, finalization) can run up to 360s timeout per step. If we
+    // cross 300s without any activity event, the function has either died or hit a real wall —
+    // showing "stuck" then is the right call.
+    const STUCK_THRESHOLD_MS = 300000;
     const checkInterval = setInterval(() => {
       const timeSinceActivity = Date.now() - discussion.lastActivityTime;
       if (timeSinceActivity > STUCK_THRESHOLD_MS && !discussion.isStuck) {
