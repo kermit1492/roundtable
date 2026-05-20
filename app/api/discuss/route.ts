@@ -179,7 +179,7 @@ async function callModel(
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 sec timeout
+      const timeoutId = setTimeout(() => controller.abort(), 180000); // 180 sec timeout (reasoning models need more)
       
       if (attempt > 1) {
         console.log(`[${modelName}] Retry attempt ${attempt}/${retries}...`);
@@ -250,7 +250,7 @@ async function streamModel(
   messages: { role: string; content: string | object }[],
   onToken: (token: string) => void,
   maxTokens: number = MAX_RESPONSE_TOKENS,
-  timeoutMs: number = 90000 // Default 90 seconds, can be increased for synthesis
+  timeoutMs: number = 240000 // Default 240 seconds (reasoning models like GPT-5.5 Pro need more); can be increased for synthesis
 ): Promise<string> {
   const actualModelId = getActualModelId(modelId);
   const MAX_RETRIES = 2;
