@@ -53,10 +53,14 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
 
   useEffect(() => {
     if (!enabled) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const canvasMaybe = canvasRef.current;
+    if (!canvasMaybe) return;
+    const ctxMaybe = canvasMaybe.getContext('2d');
+    if (!ctxMaybe) return;
+    // Bind to non-nullable typed consts so TS narrowing persists inside nested function declarations.
+    // Without these, strict mode loses the null-check inside closures like drawBackground/resize.
+    const canvas: HTMLCanvasElement = canvasMaybe;
+    const ctx: CanvasRenderingContext2D = ctxMaybe;
 
     let W = 0, H = 0, DPR = 1;
     let rafId = 0;
