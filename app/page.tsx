@@ -545,7 +545,9 @@ function SynthesisReport({
 }
 
 export default function Home() {
-  const [theme, setTheme] = useState<Theme>('light');
+  // Theme is locked to 'dark'. The variable is kept for backward compatibility with
+  // pieces of code that still read it, but no UI affordance lets the user change it.
+  const [theme] = useState<Theme>('dark');
   const [question, setQuestion] = useState('');
   const [selectedModels, setSelectedModels] = useState<string[]>(PRESETS.expert.models);
   const [activePreset, setActivePreset] = useState<string>('expert');
@@ -605,11 +607,8 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem('roundtable-theme') as Theme;
-    if (saved && ['light', 'sepia', 'dark'].includes(saved)) {
-      setTheme(saved);
-      document.documentElement.setAttribute('data-theme', saved);
-    }
+    // Theme is locked to dark — ignore any saved value from prior sessions.
+    document.documentElement.setAttribute('data-theme', 'dark');
     // Load NSFW mode from localStorage
     const savedNsfw = localStorage.getItem('roundtable-nsfw-mode');
     if (savedNsfw === 'true') {
@@ -696,12 +695,6 @@ export default function Home() {
 
     return () => clearInterval(checkInterval);
   }, [discussion.status, discussion.lastActivityTime, discussion.isStuck]);
-
-  const changeTheme = (newTheme: Theme) => {
-    setTheme(newTheme);
-    document.documentElement.setAttribute('data-theme', newTheme);
-    localStorage.setItem('roundtable-theme', newTheme);
-  };
 
   const selectPreset = (key: string) => {
     const preset = PRESETS[key as keyof typeof PRESETS];
@@ -1484,15 +1477,9 @@ export default function Home() {
     discussion.status !== 'running' ? 'idle' :
     synthesisMode ? 'synthesis' : 'discussion';
 
-  // Per-theme opacity so the starmap doesn't overpower lighter themes.
-  const starmapOpacity =
-    theme === 'dark' ? 1 :
-    theme === 'sepia' ? 0.45 :
-    0.35; // light
-
   return (
     <>
-      <StarMapBackground mode={networkMode} opacity={starmapOpacity} />
+      <StarMapBackground mode={networkMode} />
       <main className="min-h-screen transition-colors relative" style={{ backgroundColor: 'transparent' }}>
       {/* Header */}
       <header
@@ -1511,29 +1498,6 @@ export default function Home() {
             <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.6.3</span>
           </div>
           <div className="flex items-center gap-4">
-            <div className="flex items-center rounded-full p-1 gap-1" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-              <button
-                onClick={() => changeTheme('light')}
-                className={`p-2 rounded-full ${theme === 'light' ? 'shadow-sm' : 'opacity-50'}`}
-                style={{ backgroundColor: theme === 'light' ? 'var(--bg-secondary)' : 'transparent', color: 'var(--text-primary)' }}
-              >
-                <SunIcon />
-              </button>
-              <button
-                onClick={() => changeTheme('sepia')}
-                className={`p-2 rounded-full ${theme === 'sepia' ? 'shadow-sm' : 'opacity-50'}`}
-                style={{ backgroundColor: theme === 'sepia' ? 'var(--bg-secondary)' : 'transparent', color: 'var(--text-primary)' }}
-              >
-                <SepiaIcon />
-              </button>
-              <button
-                onClick={() => changeTheme('dark')}
-                className={`p-2 rounded-full ${theme === 'dark' ? 'shadow-sm' : 'opacity-50'}`}
-                style={{ backgroundColor: theme === 'dark' ? 'var(--bg-secondary)' : 'transparent', color: 'var(--text-primary)' }}
-              >
-                <MoonIcon />
-              </button>
-            </div>
             {/* Synthesis Mode Toggle */}
             <button
               onClick={toggleSynthesisMode}
