@@ -196,19 +196,32 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
           ? sampleCluster(discClusters[Math.floor(Math.random() * discClusters.length)], 2.5)
           : { x: Math.random() * W, y: Math.random() * H };
 
-        // Synthesis = "black hole" compression. Outer nodes (branches) stay put — the graph
-        // still fills the screen. Inner nodes get pulled hard toward the centre, forming a
-        // dense core. This preserves the network's extent but creates strong gravity-like focus.
+        // Synthesis = "black hole + accretion disk". Inner third of nodes collapses HARD into a
+        // tight core; outer two-thirds stretches all the way to the actual screen edges
+        // (using per-angle edge distance, so wide screens get horizontal reach, not just min(W,H)).
         const synthAngleSrc = Math.atan2(idlePos.y - cy, idlePos.x - cx);
         const idleRadius = Math.hypot(idlePos.x - cx, idlePos.y - cy);
-        const rNorm = Math.min(1, idleRadius / maxR); // 0 = at centre, 1 = at far edge
-        // Smoothstep from 0.08 (heavy compression near centre) to 1.0 (no compression for outer nodes).
-        // Below rNorm=0.25 → strong pull; above rNorm=0.75 → barely move; smooth in between.
-        const cT = Math.max(0, Math.min(1, (rNorm - 0.25) / 0.5));
-        const cSmooth = cT * cT * (3 - 2 * cT);
-        const compression = 0.08 + cSmooth * 0.92; // 0.08 at core → 1.0 at edge
-        const synthRadius = idleRadius * compression;
-        const synthPos = { x: cx + Math.cos(synthAngleSrc) * synthRadius, y: cy + Math.sin(synthAngleSrc) * synthRadius };
+        const rNorm = Math.min(1, idleRadius / maxR); // 0 = centre, 1 = source-cluster edge
+        // Distance from centre to nearest screen edge along this angle. This is what allows
+        // branches to reach the actual viewport corners on a wide canvas.
+        const cosA = Math.cos(synthAngleSrc);
+        const sinA = Math.sin(synthAngleSrc);
+        const tX = cosA > 0 ? (W - cx) / cosA : cosA < 0 ? -cx / cosA : Infinity;
+        const tY = sinA > 0 ? (H - cy) / sinA : sinA < 0 ? -cy / sinA : Infinity;
+        const edgeDist = Math.min(tX, tY);
+        // Piecewise remap of normalised radius:
+        //   rNorm < 0.35  → quadratic collapse into 0..10% of edgeDist (the gravity well)
+        //   rNorm ≥ 0.35  → smoothstep expansion from 10% out to 100% of edgeDist (the branches)
+        let synthRadius: number;
+        if (rNorm < 0.35) {
+          const k = rNorm / 0.35;
+          synthRadius = k * k * 0.10 * edgeDist;
+        } else {
+          const t = (rNorm - 0.35) / 0.65;
+          const smooth = t * t * (3 - 2 * t);
+          synthRadius = (0.10 + smooth * 0.90) * edgeDist;
+        }
+        const synthPos = { x: cx + cosA * synthRadius, y: cy + sinA * synthRadius };
 
         const brightness = 0.4 + Math.random() * 0.6;
         const size = 0.4 + Math.random() * Math.random() * 3.2;
@@ -540,7 +553,9 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
           const hotMix = (transitionT - 0.5) / 0.5;
           ctx.globalAlpha = nd.brightness * 0.5 * hotMix * opacity;
           ctx.fillStyle = 'rgba(255, 130, 70, 1)';
-          ctx.fillRect(bx - haloR, by - haloR, haloR * 2, haloR * 2);
+          ctx.beginPath();
+          ctx.arc(bx, by, haloR, 0, Math.PI * 2);
+          ctx.fill();
           ctx.globalCompositeOperation = 'source-over';
         }
         ctx.globalAlpha = opacity;
@@ -608,25 +623,31 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
         ctx.arc(headX, headY, 1.6, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 0.65 * opacity * fade;
-        // Halo sprite tinted to the model colour by setting `fillStyle`'s shadow context;
-        // drawImage doesn't tint, so we paint a small radial gradient instead for halo glow.
+        // Soft circular halo around the pulse head, tinted to the source model's colour.
         const halo = ctx.createRadialGradient(headX, headY, 0, headX, headY, 7);
         halo.addColorStop(0, pulseColorStr(P.color, 0.85));
         halo.addColorStop(1, pulseColorStr(P.color, 0));
         ctx.fillStyle = halo;
-        ctx.fillRect(headX - 7, headY - 7, 14, 14);
+        ctx.beginPath();
+        ctx.arc(headX, headY, 7, 0, Math.PI * 2);
+        ctx.fill();
         ctx.globalAlpha = opacity;
       }
 
       if (currentMode === 'synthesis' && transitionT > 0.4) {
         const coreAlpha = (transitionT - 0.4) / 0.6;
-        const coreR = 60 + Math.sin(now / 200) * 6;
+        const coreR = 80 + Math.sin(now / 200) * 8;
+        // Black-hole core: a brighter, more compact glow at the centre that pulses.
+        // Drawn as a circle (not rect) so it reads cleanly against the dense collapsing nodes.
         const coreG = ctx.createRadialGradient(W * 0.5, H * 0.52, 0, W * 0.5, H * 0.52, coreR);
-        coreG.addColorStop(0, `rgba(255, 240, 200, ${coreAlpha * 0.6})`);
-        coreG.addColorStop(0.4, `rgba(255, 140, 80, ${coreAlpha * 0.3})`);
+        coreG.addColorStop(0, `rgba(255, 245, 220, ${coreAlpha * 0.85})`);
+        coreG.addColorStop(0.25, `rgba(255, 180, 100, ${coreAlpha * 0.55})`);
+        coreG.addColorStop(0.6, `rgba(255, 90, 90, ${coreAlpha * 0.25})`);
         coreG.addColorStop(1, 'rgba(255, 50, 80, 0)');
         ctx.fillStyle = coreG;
-        ctx.fillRect(W * 0.5 - coreR, H * 0.52 - coreR, coreR * 2, coreR * 2);
+        ctx.beginPath();
+        ctx.arc(W * 0.5, H * 0.52, coreR, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       // Restore the world transform applied at the start of the drawing block.
