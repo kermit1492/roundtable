@@ -1484,14 +1484,22 @@ export default function Home() {
       }
 
       setDiscussion(p => {
-        if (p.status === 'complete') {
+        // If stream ended but status is still 'running', the server never sent its
+        // terminal event (synthesis_complete / discussion_complete). Most likely Vercel
+        // killed the function or the connection dropped. We need to transition to a
+        // final state so the user isn't stuck staring at a streaming view forever.
+        let nextStatus = p.status;
+        if (p.status === 'running') {
+          nextStatus = 'error'; // SynthesisReport renders with the partial draft
+        }
+        if (nextStatus === 'complete') {
           setThread(t => [...t, {
             question: currentQuestion,
             consensusResult: p.consensusResult,
             finalResponses,
           }]);
         }
-        return p;
+        return nextStatus === p.status ? p : { ...p, status: nextStatus };
       });
 
       setQuestion('');
@@ -1817,21 +1825,33 @@ export default function Home() {
           </div>
         )}
 
-        {/* Synthesis Mode - Final synthesis generation */}
-        {discussion.status === 'running' && synthesisMode && (synthesisPhase === 'finalizing' || synthesisPhase === 'synthesis_finalizing') && synthesisDraft && (
+        {/* Synthesis Mode — Final synthesis being generated OR awaiting sign-off.
+            Keep visible from finalizing through signoff so the user always sees the summary text
+            (signoff is silent — without this the screen looks empty between finalize and complete). */}
+        {discussion.status === 'running' && synthesisMode && (
+          synthesisPhase === 'finalizing' ||
+          synthesisPhase === 'synthesis_finalizing' ||
+          synthesisPhase === 'signoff' ||
+          synthesisPhase === 'synthesis_signoff'
+        ) && synthesisDraft && (
           <div
             className="mb-6 p-6 rounded-xl border"
             style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}
           >
             <h3 className="text-sm font-medium mb-3 flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
               ✨ Final Synthesis by {synthesisWinnerModel}
+              {(synthesisPhase === 'signoff' || synthesisPhase === 'synthesis_signoff') && (
+                <span className="text-xs font-normal opacity-70">· awaiting model sign-offs…</span>
+              )}
             </h3>
             <div
               className="prose prose-sm max-w-none whitespace-pre-wrap"
               style={{ color: 'var(--text-primary)' }}
             >
               {synthesisDraft}
-              <span className="animate-pulse">|</span>
+              {(synthesisPhase === 'finalizing' || synthesisPhase === 'synthesis_finalizing') && (
+                <span className="animate-pulse">|</span>
+              )}
             </div>
           </div>
         )}
@@ -1952,9 +1972,21 @@ export default function Home() {
         )}
 
         {/* Consensus result */}
-        {/* Synthesis Mode Result */}
-        {discussion.status === 'complete' && synthesisMode && (synthesisResult || synthesisDraft) && (
+        {/* Synthesis Mode Result — show whenever we have anything (complete OR errored mid-flight).
+            Without this, an aborted stream wipes both the streaming view (status!='running') and
+            the report (status!='complete') and the user sees an empty page. */}
+        {synthesisMode && discussion.status !== 'idle' && discussion.status !== 'running' && (synthesisResult || synthesisDraft) && (
           <div ref={consensusRef}>
+            {discussion.status === 'error' && (
+              <div
+                className="mb-3 p-3 rounded-lg border flex items-start gap-2"
+                style={{ backgroundColor: '#7f1d1d33', borderColor: '#dc2626' }}
+              >
+                <span className="text-sm" style={{ color: '#fecaca' }}>
+                  ⚠️ Synthesis stream ended early (network drop or server limit). Showing the partial result that was generated so far.
+                </span>
+              </div>
+            )}
             <SynthesisReport
               result={synthesisResult}
               differences={synthesisDifferences}
