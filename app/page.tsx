@@ -750,15 +750,15 @@ export default function Home() {
   useEffect(() => {
     if (discussion.status !== 'running') return;
 
-    // 5 minutes — matches Vercel's function max-duration. Discussion votes can think 60-180s
-    // and synthesis phases (drafts, finalization) can run up to 360s timeout per step. If we
-    // cross 300s without any activity event, the function has either died or hit a real wall —
-    // showing "stuck" then is the right call.
-    const STUCK_THRESHOLD_MS = 300000;
+    // Server sends a heartbeat every 10s and a phase_progress event whenever a model
+    // settles inside a synthesis phase. So lastActivityTime should refresh constantly while
+    // the function is alive. If we go 90s with NO activity, the function has very likely died
+    // (Vercel killed it, connection dropped, etc.) — show stuck and let the user retry.
+    const STUCK_THRESHOLD_MS = 90000;
     const checkInterval = setInterval(() => {
       const timeSinceActivity = Date.now() - discussion.lastActivityTime;
       if (timeSinceActivity > STUCK_THRESHOLD_MS && !discussion.isStuck) {
-        console.warn('Discussion appears stuck - no activity for 2 minutes');
+        console.warn(`Discussion appears stuck — no heartbeat for ${Math.round(timeSinceActivity / 1000)}s`);
         setDiscussion(p => ({ ...p, isStuck: true }));
       }
     }, 10000); // Check every 10 seconds
@@ -1237,6 +1237,12 @@ export default function Home() {
         setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
+      case 'phase_progress':
+        // Fired when a model finishes (or times out) inside a synthesis phase.
+        // Counts as activity so stuck-detection doesn't fire during long fan-outs.
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
       case 'timeout':
         setDiscussion(p => ({
           ...p,
@@ -1658,7 +1664,7 @@ export default function Home() {
                 style={{ backgroundColor: '#fef3c7', borderColor: '#f59e0b' }}
               >
                 <span className="text-sm" style={{ color: '#92400e' }}>
-                  ⚠️ Discussion appears stuck — no activity for 2 minutes
+                  ⚠️ Discussion appears stuck — no heartbeat from server for 90+ seconds
                 </span>
                 <button
                   onClick={stopDiscussion}

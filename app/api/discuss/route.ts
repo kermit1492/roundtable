@@ -2,14 +2,14 @@ import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // 5 minutes (Vercel Pro limit)
+export const maxDuration = 800; // 800s — Vercel Pro fluid-compute limit. Synthesis pipeline (analysis → drafts → cross-review → vote → finalize → signoff) needs more than 5 min when one model (e.g. GPT-5.5 Pro reasoning) is slow.
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const MAX_ITERATIONS = 5;
 const PARTIAL_CONSENSUS_THRESHOLD = 0.66; // 2/3 models agree (0.666...)
 const MAX_VOTE_RETRIES = 5; // Each model MUST vote
 const MAX_DISCUSSION_TIMEOUT_MS = 600000; // 10 minutes total discussion timeout
-const HEARTBEAT_INTERVAL_MS = 15000; // 15 seconds heartbeat
+const HEARTBEAT_INTERVAL_MS = 10000; // 10s heartbeat (defends against client stuck-detection during long silent phases)
 
 interface FileAttachment {
   type: 'image' | 'pdf';
@@ -472,6 +472,78 @@ async function streamModel(
   } // end retry loop
 
   throw new Error(`[${actualModelId}] All ${MAX_RETRIES + 1} attempts failed`);
+}
+
+/**
+ * Run a set of promises with a hard phase-level deadline.
+ *
+ * Each promise should already swallow its own errors and return a fallback value
+ * (e.g. an empty draft / failed review). If the entire phase doesn't settle within
+ * `phaseTimeoutMs`, still-pending promises are abandoned and `fallbackFor(i)` is
+ * used in their place. We also emit a `phase_progress` event whenever a promise
+ * settles so the client sees movement even when one model is silent.
+ *
+ * Note: this abandons the network fetches rather than aborting them. The per-stream
+ * timeout inside `streamModel` is the actual cancellation mechanism — phase timeout
+ * is just a backstop so the pipeline keeps moving.
+ */
+async function runPhase<T>(
+  phaseName: string,
+  promises: Promise<T>[],
+  phaseTimeoutMs: number,
+  fallbackFor: (i: number) => T,
+  send: (event: string, data: object) => void,
+): Promise<T[]> {
+  const total = promises.length;
+  const results: T[] = new Array(total);
+  const settled = new Array(total).fill(false);
+  let completed = 0;
+
+  const tracked = promises.map((p, i) =>
+    p.then(
+      (v) => {
+        if (!settled[i]) {
+          results[i] = v;
+          settled[i] = true;
+          completed++;
+          send('phase_progress', { phase: phaseName, completed, total });
+        }
+        return v;
+      },
+      (err) => {
+        if (!settled[i]) {
+          results[i] = fallbackFor(i);
+          settled[i] = true;
+          completed++;
+          send('phase_progress', { phase: phaseName, completed, total, error: String(err).slice(0, 200) });
+        }
+        return results[i];
+      },
+    ),
+  );
+
+  let deadlineTimer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<'TIMEOUT'>(resolve => {
+    deadlineTimer = setTimeout(() => resolve('TIMEOUT'), phaseTimeoutMs);
+  });
+
+  const allDone = Promise.allSettled(tracked).then(() => 'DONE' as const);
+  const outcome = await Promise.race([allDone, deadline]);
+  if (deadlineTimer) clearTimeout(deadlineTimer);
+
+  if (outcome === 'TIMEOUT') {
+    console.warn(`[Phase:${phaseName}] timed out after ${phaseTimeoutMs}ms with ${completed}/${total} completed`);
+    for (let i = 0; i < total; i++) {
+      if (!settled[i]) {
+        results[i] = fallbackFor(i);
+        settled[i] = true;
+        completed++;
+        send('phase_progress', { phase: phaseName, completed, total, timeout: true });
+      }
+    }
+  }
+
+  return results;
 }
 
 const SYSTEM_PROMPT = `You are {model_name}, an expert AI participating in a roundtable discussion with other AI models.
@@ -999,7 +1071,7 @@ async function handleSynthesisMode(
           send('model_token', { model: modelId, token, phase: 'analysis' });
         },
         MAX_RESPONSE_TOKENS,
-        300000 // 5 minutes timeout for synthesis analysis
+        180000 // 3 min per-stream timeout for analysis (phase deadline below is the backstop)
       );
 
       send('analysis_complete', { model: modelName, wordCount: fullResponse.split(/\s+/).length });
@@ -1011,7 +1083,14 @@ async function handleSynthesisMode(
     }
   });
 
-  const analysisResults = await Promise.all(analysisPromises);
+  // Phase deadline: 4 minutes for analysis. If 2+ models complete we proceed.
+  const analysisResults = await runPhase(
+    'analysis',
+    analysisPromises,
+    240000,
+    (i) => ({ modelId: models[i], modelName: getModelName(models[i]), content: 'Error: analysis phase timeout' }),
+    send,
+  );
 
   // Log analysis results for debugging
   console.log('[Synthesis] Analysis results:');
@@ -1057,7 +1136,7 @@ async function handleSynthesisMode(
           send('draft_token', { model: analysis.modelId, token });
         },
         10000, // Tokens for comprehensive draft
-        360000 // 6 minutes timeout for synthesis drafts
+        180000 // 3 min per-stream timeout (phase deadline is the real backstop)
       );
       send('draft_complete', { model: analysis.modelName, wordCount: draft.split(/\s+/).length });
       return { modelId: analysis.modelId, modelName: analysis.modelName, draft };
@@ -1068,7 +1147,15 @@ async function handleSynthesisMode(
     }
   });
 
-  const draftResults = await Promise.all(draftPromises);
+  // Phase deadline: 4 minutes for all drafts. If a model is still pending past that,
+  // abandon it and proceed with whoever finished (drafts.length < 2 check below catches the bad case).
+  const draftResults = await runPhase(
+    'drafts',
+    draftPromises,
+    240000,
+    (i) => ({ modelId: analyses[i].modelId, modelName: analyses[i].modelName, draft: '' }),
+    send,
+  );
 
   // Log draft results for debugging
   console.log('[Synthesis] Draft results:');
@@ -1091,15 +1178,18 @@ async function handleSynthesisMode(
   const allReviews: { reviewerId: string; reviewerName: string; targetId: string; targetName: string; review: string; rating: number }[] = [];
 
   // Each model reviews all OTHER drafts
-  const reviewPromises: Promise<{ reviewerId: string; reviewerName: string; targetId: string; targetName: string; review: string; rating: number }>[] = [];
+  type ReviewResult = { reviewerId: string; reviewerName: string; targetId: string; targetName: string; review: string; rating: number };
+  const reviewPromises: Promise<ReviewResult>[] = [];
+  const reviewPairs: { reviewer: typeof drafts[number]; target: typeof drafts[number] }[] = [];
 
   for (const reviewer of drafts) {
     const myAnalysis = analyses.find(a => a.modelId === reviewer.modelId)?.content || '';
 
     for (const target of drafts) {
       if (target.modelId === reviewer.modelId) continue; // Don't review your own draft
+      reviewPairs.push({ reviewer, target });
 
-      const reviewPromise = (async () => {
+      const reviewPromise = (async (): Promise<ReviewResult> => {
         const reviewPrompt = SYNTHESIS_REVIEW_PROMPT
           .replace('{model_name}', reviewer.modelName)
           .replace('{draft_author}', target.modelName)
@@ -1120,7 +1210,7 @@ async function handleSynthesisMode(
               send('review_token', { reviewer: reviewer.modelId, target: target.modelId, token });
             },
             3000,
-            240000 // 4 minutes timeout for reviews
+            90000 // 90s per-review stream timeout; reviews are short and we have N*(N-1) in parallel
           );
 
           // Extract rating from review
@@ -1131,6 +1221,7 @@ async function handleSynthesisMode(
           return { reviewerId: reviewer.modelId, reviewerName: reviewer.modelName, targetId: target.modelId, targetName: target.modelName, review, rating };
         } catch (error) {
           console.error(`[${reviewer.modelName}] Review of ${target.modelName} failed:`, error);
+          send('review_complete', { reviewer: reviewer.modelName, target: target.modelName, rating: 5, error: String(error).slice(0, 200) });
           return { reviewerId: reviewer.modelId, reviewerName: reviewer.modelName, targetId: target.modelId, targetName: target.modelName, review: 'Review failed', rating: 5 };
         }
       })();
@@ -1139,7 +1230,23 @@ async function handleSynthesisMode(
     }
   }
 
-  const reviewResults = await Promise.all(reviewPromises);
+  // Phase deadline: 3 minutes for the entire review fan-out.
+  // If one reviewer (e.g. GPT-5.5 Pro reasoning) is silent, we still proceed with whatever
+  // we got — the voting phase weights by available reviews + draft quality.
+  const reviewResults = await runPhase(
+    'reviews',
+    reviewPromises,
+    180000,
+    (i): ReviewResult => ({
+      reviewerId: reviewPairs[i].reviewer.modelId,
+      reviewerName: reviewPairs[i].reviewer.modelName,
+      targetId: reviewPairs[i].target.modelId,
+      targetName: reviewPairs[i].target.modelName,
+      review: 'Review timed out',
+      rating: 5,
+    }),
+    send,
+  );
   allReviews.push(...reviewResults);
 
   // ==================== PHASE 4: Voting ====================
@@ -1221,7 +1328,26 @@ async function handleSynthesisMode(
     };
   });
 
-  const voteResults = await Promise.all(votePromises);
+  // Phase deadline: 90s for voting (callModel timeout is 180s; deadline forces moving on)
+  const voteResults = await runPhase(
+    'voting',
+    votePromises,
+    90000,
+    (i): SynthesisVote => {
+      const voter = drafts[i];
+      const defaultVote = drafts.find(d => d.modelId !== voter.modelId)?.modelName || drafts[0].modelName;
+      return {
+        voterId: voter.modelId,
+        voterName: voter.modelName,
+        bestDraft: defaultVote,
+        ranking: [],
+        reasoning: 'Vote phase timeout',
+        improvements: [],
+        confidence: 0.5,
+      };
+    },
+    send,
+  );
   votes.push(...voteResults);
 
   // Tally votes
@@ -1297,7 +1423,7 @@ async function handleSynthesisMode(
         send('finalization_token', { token });
       },
       12000,
-      360000 // 6 minutes timeout for finalization
+      240000 // 4 min timeout for finalization (was 6 min; phase budget is now bounded)
     );
   } catch (error) {
     console.error(`[${winner.modelName}] Finalization failed:`, error);
@@ -1353,7 +1479,18 @@ async function handleSynthesisMode(
     };
   });
 
-  const signoffResults = await Promise.all(signoffPromises);
+  // Phase deadline: 90s for sign-offs (each is just a JSON callModel)
+  const signoffResults = await runPhase(
+    'signoff',
+    signoffPromises,
+    90000,
+    (i) => ({
+      modelId: analyses[i].modelId,
+      modelName: analyses[i].modelName,
+      signoff: { approved: true, confidence: 0.7, remaining_differences: [] },
+    }),
+    send,
+  );
   signoffs.push(...signoffResults);
 
   // Extract and format differences - collect all positions on each topic
@@ -1953,8 +2090,11 @@ export async function POST(request: NextRequest) {
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
+      // Disable proxy buffering so heartbeats reach the client immediately even when
+      // a long synthesis phase is silent. Nginx/CDN-friendly hint.
+      'X-Accel-Buffering': 'no',
     },
   });
 }
