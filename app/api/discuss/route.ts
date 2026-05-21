@@ -243,16 +243,26 @@ async function callModel(
   maxTokens: number = MAX_RESPONSE_TOKENS,
   temperature: number = 0.7,
   retries: number = 3,
-  timeoutMs: number = 180000 // per-attempt timeout; default 180s for reasoning models
+  timeoutMs: number = 180000, // per-attempt timeout; default 180s for reasoning models
+  externalSignal?: AbortSignal, // upstream abort (client disconnected, user pressed Stop)
 ): Promise<string> {
   const actualModelId = getActualModelId(modelId);
   const modelName = getModelName(modelId);
 
+  // If the client already disconnected before we even start, bail immediately.
+  if (externalSignal?.aborted) throw new Error('aborted');
+
   for (let attempt = 1; attempt <= retries; attempt++) {
+    // Declare outside try so catch/finally can clean them up regardless of where we throw.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const onExternalAbort = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort();
+      else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      
       if (attempt > 1) {
         console.log(`[${modelName}] Retry attempt ${attempt}/${retries}...`);
       }
@@ -275,6 +285,7 @@ async function callModel(
       });
 
       clearTimeout(timeoutId);
+      if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -288,21 +299,28 @@ async function callModel(
 
       const message = data.choices?.[0]?.message;
       const content = message?.content || message?.text || '';
-      
+
       // Check for empty response
       if (!content || content.trim().length === 0) {
         console.error(`[${modelName}] Empty response from API`);
         throw new Error('Empty response from model');
       }
-      
+
       return content;
     } catch (error) {
-      const isConnectError = error instanceof Error && 
+      clearTimeout(timeoutId);
+      if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
+
+      // If we got aborted because the user pressed Stop / closed the tab, surface that
+      // as a non-retryable error so the calling pipeline can bail out cleanly.
+      if (externalSignal?.aborted) throw new Error('aborted');
+
+      const isConnectError = error instanceof Error &&
         (error.message.includes('ConnectTimeout') || error.message.includes('fetch failed'));
-      
-      console.log(`[${modelName}] callModel attempt ${attempt}/${retries} failed:`, 
+
+      console.log(`[${modelName}] callModel attempt ${attempt}/${retries} failed:`,
         isConnectError ? 'Connection timeout' : error);
-      
+
       if (attempt === retries) {
         console.error(`[${modelName}] All ${retries} attempts failed`);
         throw error;
@@ -322,15 +340,20 @@ async function streamModel(
   messages: { role: string; content: string | object }[],
   onToken: (token: string) => void,
   maxTokens: number = MAX_RESPONSE_TOKENS,
-  timeoutMs: number = 240000 // Default 240 seconds (reasoning models like GPT-5.5 Pro need more); can be increased for synthesis
+  timeoutMs: number = 240000, // Default 240 seconds (reasoning models like GPT-5.5 Pro need more); can be increased for synthesis
+  externalSignal?: AbortSignal, // upstream abort (client disconnected, user pressed Stop)
 ): Promise<string> {
   const actualModelId = getActualModelId(modelId);
   const MAX_RETRIES = 2;
+
+  // Fast-fail if the client already disconnected.
+  if (externalSignal?.aborted) throw new Error('aborted');
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       console.log(`[${actualModelId}] Retry attempt ${attempt}/${MAX_RETRIES}...`);
       await new Promise(r => setTimeout(r, 2000 * attempt)); // backoff: 2s, 4s
+      if (externalSignal?.aborted) throw new Error('aborted');
     }
 
     let timedOut = false;
@@ -340,6 +363,12 @@ async function streamModel(
       console.log(`[${actualModelId}] Stream timeout reached (${timeoutMs / 1000}s)`);
       controller.abort();
     }, timeoutMs);
+    // Chain client/user abort into this attempt's controller so the in-flight fetch dies.
+    const onExternalAbort = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) controller.abort();
+      else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
 
     try {
     const apiUrl = 'https://openrouter.ai/api/v1/chat/completions';
@@ -440,6 +469,12 @@ async function streamModel(
     return fullResponse;
   } catch (error: unknown) {
     clearTimeout(timeoutId);
+    // User-initiated abort: do NOT retry, just propagate. The whole pipeline should stop.
+    if (externalSignal?.aborted) {
+      console.log(`[${actualModelId}] Stream aborted by client/user`);
+      throw new Error('aborted');
+    }
+
     const errMsg = error instanceof Error ? error.message : String(error);
     const causeMsg = (error instanceof Error && error.cause instanceof Error) ? error.cause.message : '';
     const fullMsg = errMsg + ' ' + causeMsg;
@@ -469,6 +504,7 @@ async function streamModel(
     throw error;
   } finally {
     clearTimeout(timeoutId);
+    if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
   }
   } // end retry loop
 
@@ -987,7 +1023,8 @@ interface AnalyzedPoints {
 
 async function analyzePointsWithSonnet(
   votes: VoteResult[],
-  send: (event: string, data: unknown) => void
+  send: (event: string, data: unknown) => void,
+  abortSignal?: AbortSignal,
 ): Promise<AnalyzedPoints | null> {
   // Prepare data for analysis
   const pointsData = votes.map(v => ({
@@ -1011,7 +1048,7 @@ async function analyzePointsWithSonnet(
       { role: 'user', content: ANALYZE_POINTS_PROMPT.replace('{points_data}', JSON.stringify(pointsData, null, 2)) },
     ];
     
-    const response = await callModel('google/gemini-3.5-flash', messages, 1500, 0.2, 2);
+    const response = await callModel('google/gemini-3.5-flash', messages, 1500, 0.2, 2, 180000, abortSignal);
 
     // Parse JSON
     const jsonMatch = response.match(/\{[\s\S]*\}/);
@@ -1037,12 +1074,24 @@ async function handleSynthesisMode(
   question: string,
   models: string[],
   send: (type: string, data: object) => void,
-  file?: FileAttachment
+  file?: FileAttachment,
+  abortSignal?: AbortSignal,
 ) {
   const MODEL_COLORS: Record<string, string> = {
     'openai/gpt-5.5-pro': '#10b981',
     'anthropic/claude-opus-4.7': '#f59e0b',
     'google/gemini-3.5-flash': '#4d8eff',
+  };
+
+  // Quick check at the top of each phase: if the client disconnected, bail out before
+  // launching another batch of expensive LLM calls.
+  const checkAborted = (phase: string) => {
+    if (abortSignal?.aborted) {
+      console.log(`[Synthesis:${phase}] aborted by client, exiting pipeline`);
+      send('synthesis_error', { error: 'Aborted by user', phase });
+      return true;
+    }
+    return false;
   };
 
   // Time budget tracker. Vercel maxDuration=800s; we reserve 80s for cleanup/headroom,
@@ -1080,7 +1129,8 @@ async function handleSynthesisMode(
           send('model_token', { model: modelId, token, phase: 'analysis' });
         },
         MAX_RESPONSE_TOKENS,
-        180000 // 3 min per-stream timeout for analysis (phase deadline below is the backstop)
+        180000, // 3 min per-stream timeout for analysis (phase deadline below is the backstop)
+        abortSignal,
       );
 
       send('analysis_complete', { model: modelName, wordCount: fullResponse.split(/\s+/).length });
@@ -1118,6 +1168,8 @@ async function handleSynthesisMode(
     return;
   }
 
+  if (checkAborted('drafts')) return;
+
   // ==================== PHASE 2: ALL Models Write Drafts ====================
   // Every model writes their own draft synthesis
   send('draft_phase_start', { models: analyses.map(a => a.modelName) });
@@ -1147,7 +1199,8 @@ async function handleSynthesisMode(
           send('draft_token', { model: analysis.modelId, token });
         },
         10000, // Tokens for comprehensive draft
-        180000 // 3 min per-stream timeout (phase deadline is the real backstop)
+        180000, // 3 min per-stream timeout (phase deadline is the real backstop)
+        abortSignal,
       );
       send('draft_complete', { model: analysis.modelName, wordCount: draft.split(/\s+/).length });
       return { modelId: analysis.modelId, modelName: analysis.modelName, draft };
@@ -1182,6 +1235,8 @@ async function handleSynthesisMode(
     send('synthesis_error', { error: 'Not enough models completed drafts', phase: 'drafting' });
     return;
   }
+
+  if (checkAborted('reviews')) return;
 
   // ==================== PHASE 3: Cross-Review ====================
   // Each model reviews ALL other models' drafts
@@ -1222,7 +1277,8 @@ async function handleSynthesisMode(
               send('review_token', { reviewer: reviewer.modelId, target: target.modelId, token });
             },
             3000,
-            90000 // 90s per-review stream timeout; reviews are short and we have N*(N-1) in parallel
+            90000, // 90s per-review stream timeout; reviews are short and we have N*(N-1) in parallel
+            abortSignal,
           );
 
           // Extract rating from review
@@ -1260,6 +1316,8 @@ async function handleSynthesisMode(
     send,
   );
   allReviews.push(...reviewResults);
+
+  if (checkAborted('voting')) return;
 
   // ==================== PHASE 4: Voting ====================
   // Each model votes for the best draft (not their own)
@@ -1303,7 +1361,10 @@ async function handleSynthesisMode(
           { role: 'user', content: 'Vote for the best draft synthesis. You may vote for your own if you genuinely believe it is best.' }
         ],
         2000,
-        0.3
+        0.3,
+        3,
+        180000,
+        abortSignal,
       );
 
       // Parse JSON response
@@ -1396,6 +1457,8 @@ async function handleSynthesisMode(
     totalVotes: votes.length
   });
 
+  if (checkAborted('finalize')) return;
+
   // ==================== PHASE 5: Finalization ====================
   // Winner incorporates feedback and finalizes
   send('finalization_start', { finalizer: winner.modelName });
@@ -1452,7 +1515,8 @@ async function handleSynthesisMode(
             send('finalization_token', { token });
           },
           12000,
-          Math.min(240000, finalizeDeadline) // cap per-stream timeout by remaining budget
+          Math.min(240000, finalizeDeadline), // cap per-stream timeout by remaining budget
+          abortSignal,
         );
         return true;
       } catch (error) {
@@ -1479,6 +1543,8 @@ async function handleSynthesisMode(
   }
 
   // ==================== PHASE 6: Sign-off and Collect Differences ====================
+  if (checkAborted('signoff')) return;
+
   // Signoff is best-effort decoration on the synthesis. If we're nearly out of Vercel budget,
   // skip it entirely and emit synthesis_complete with default approvals — better to ship the
   // synthesis than die mid-signoff and leave the user staring at "awaiting model sign-offs".
@@ -1517,6 +1583,7 @@ async function handleSynthesisMode(
           0.3,
           1,                  // retries = 1 (no retries; we don't have time)
           signoffCallTimeout, // 30s per attempt
+          abortSignal,
         );
 
         // Parse JSON response
@@ -1713,6 +1780,19 @@ export async function POST(request: NextRequest) {
 
   const { stream, send, close } = createSSEStream();
 
+  // Master abort controller. When the client closes the SSE stream (Stop button, tab close,
+  // page navigation), `request.signal` fires and we forward it here. Every in-flight
+  // streamModel/callModel is wired to this signal, so they cancel their fetches immediately
+  // instead of continuing to burn OpenRouter tokens.
+  const masterAbort = new AbortController();
+  const onClientDisconnect = () => {
+    if (!masterAbort.signal.aborted) {
+      console.log('[Discussion] Client disconnected — aborting all in-flight LLM calls');
+      masterAbort.abort();
+    }
+  };
+  request.signal.addEventListener('abort', onClientDisconnect, { once: true });
+
   (async () => {
     // Start heartbeat to keep connection alive and detect stale connections
     const heartbeatInterval = setInterval(() => {
@@ -1725,7 +1805,7 @@ export async function POST(request: NextRequest) {
     try {
       // Handle Synthesis Mode separately
       if (synthesisMode) {
-        await handleSynthesisMode(question, requestedModels, send, file || undefined);
+        await handleSynthesisMode(question, requestedModels, send, file || undefined, masterAbort.signal);
         return; // handleSynthesisMode handles its own completion
       }
 
@@ -1747,6 +1827,13 @@ export async function POST(request: NextRequest) {
 
       while (iteration < MAX_ITERATIONS) {
         iteration++;
+
+        // Bail out immediately if the client pressed Stop or closed the connection.
+        if (masterAbort.signal.aborted) {
+          console.log('[Discussion] Aborted by client, exiting loop');
+          send('error', { message: 'Aborted by user' });
+          break;
+        }
 
         // Check overall discussion timeout
         if (isDiscussionTimedOut()) {
@@ -1817,7 +1904,10 @@ export async function POST(request: NextRequest) {
               messages,
               (token) => {
                 send('model_token', { model: modelId, modelName, token, iteration });
-              }
+              },
+              MAX_RESPONSE_TOKENS,
+              240000,
+              masterAbort.signal,
             );
 
             completedModels.add(modelId);
@@ -1903,7 +1993,7 @@ export async function POST(request: NextRequest) {
               // Send heartbeat before each vote attempt
               send('heartbeat', { timestamp: Date.now(), context: 'voting', model: modelName });
 
-              const voteResponse = await callModel(modelId, voteMessages, 4000, 0.3, 1); // Reduced retries inside callModel
+              const voteResponse = await callModel(modelId, voteMessages, 4000, 0.3, 1, 180000, masterAbort.signal);
 
               console.log(`[${modelName}] Vote response length: ${voteResponse.length}`);
               console.log(`[${modelName}] Vote response preview: ${voteResponse.slice(0, 200)}...`);
@@ -2055,7 +2145,7 @@ export async function POST(request: NextRequest) {
         let finalAgreements: GroupedAgreement[];
         let finalDisagreements: GroupedDisagreement[];
 
-        const analyzedPoints = await analyzePointsWithSonnet(votes, send);
+        const analyzedPoints = await analyzePointsWithSonnet(votes, send, masterAbort.signal);
 
         if (analyzedPoints) {
           finalAgreements = analyzedPoints.agreements;
@@ -2148,10 +2238,16 @@ export async function POST(request: NextRequest) {
       }
     } catch (error) {
       console.error('Discussion error:', error);
-      send('error', { message: String(error) });
+      // 'aborted' is the marker we throw on client disconnect — don't surface as scary error.
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg !== 'aborted') {
+        send('error', { message: msg });
+      }
     } finally {
       // Clean up heartbeat interval
       clearInterval(heartbeatInterval);
+      // Remove the client-disconnect listener so we don't leak it when the function ends.
+      request.signal.removeEventListener('abort', onClientDisconnect);
       send('done', {});
       close();
     }
