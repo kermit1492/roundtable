@@ -132,6 +132,23 @@ function MoonIcon() {
   );
 }
 
+function SendIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12l7-7 7 7" />
+      <path d="M12 5v14" />
+    </svg>
+  );
+}
+
+function StopIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <rect x="6" y="6" width="12" height="12" rx="1.5" />
+    </svg>
+  );
+}
+
 function FileIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1484,7 +1501,7 @@ export default function Home() {
   return (
     <>
       <StarMapBackground mode={networkMode} />
-      <main className="min-h-screen transition-colors relative" style={{ backgroundColor: 'transparent' }}>
+      <main className="min-h-screen transition-colors relative" style={{ backgroundColor: 'transparent', paddingBottom: 140 }}>
       {/* Header */}
       <header
         className="border-b sticky top-0 z-10"
@@ -1578,144 +1595,15 @@ export default function Home() {
           </div>
         )}
 
-        {/* Input area */}
-        <div
-          className="rounded-2xl border p-6 mb-8 shadow-sm"
-          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: nsfwMode ? '#fecaca' : 'var(--border-primary)' }}
-        >
-          {nsfwMode && (
-            <div
-              className="mb-3 px-3 py-1.5 rounded-lg text-xs font-medium inline-flex items-center gap-1"
-              style={{ backgroundColor: '#fef2f2', color: '#dc2626' }}
-            >
-              🔥 NSFW Mode: Модели будут троллить друг друга с матом и юмором
-            </div>
-          )}
-          <textarea
-            value={question}
-            onChange={e => setQuestion(e.target.value)}
-            placeholder={thread.length > 0 ? 'Ask a follow-up...' : 'What would you like to discuss?'}
-            className="w-full bg-transparent text-lg focus:outline-none resize-none overflow-y-auto"
-            style={{ color: 'var(--text-primary)', height: '120px' }}
-            disabled={discussion.status === 'running'}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey && question.trim() && selectedModels.length >= 2) {
-                e.preventDefault();
-                startDiscussion(thread.length > 0);
-              }
-            }}
-          />
-
-          {file && (
-            <div className="mt-3 flex items-center gap-2 p-2 rounded-lg" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-              <FileIcon />
-              <span className="text-sm flex-1" style={{ color: 'var(--text-secondary)' }}>{file.name}</span>
-              {compatibleCount < selectedModels.length && (
-                <span
-                  className="text-xs px-2 py-0.5 rounded"
-                  style={{ backgroundColor: 'var(--warning-bg)', color: 'var(--warning-text)' }}
-                >
-                  {compatibleCount}/{selectedModels.length} support
-                </span>
-              )}
-              <button onClick={removeFile} className="p-1" style={{ color: 'var(--text-tertiary)' }}>
-                <CloseIcon />
-              </button>
-            </div>
-          )}
-
-          <div className="mt-4 pt-4 border-t" style={{ borderColor: 'var(--border-secondary)' }}>
-            {/* PRESETS */}
-            <div className="flex flex-wrap items-center gap-2 mb-4">
-              <span className="text-xs font-medium" style={{ color: 'var(--text-tertiary)' }}>Quick select:</span>
-              {Object.entries(PRESETS).map(([key, preset]) => (
-                <button
-                  key={key}
-                  onClick={() => selectPreset(key)}
-                  disabled={discussion.status === 'running'}
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium border transition-all"
-                  style={{
-                    backgroundColor: activePreset === key ? 'var(--accent)' : 'var(--bg-tertiary)',
-                    color: activePreset === key ? 'var(--accent-text)' : 'var(--text-secondary)',
-                    borderColor: activePreset === key ? 'var(--accent)' : 'var(--border-primary)',
-                    boxShadow: activePreset === key ? '0 0 0 2px var(--accent)' : 'none',
-                  }}
-                >
-                  {preset.icon} {preset.name}
-                </button>
-              ))}
-              {activePreset === 'custom' && (
-                <span
-                  className="px-2 py-1 rounded text-xs"
-                  style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' }}
-                >
-                  Custom
-                </span>
-              )}
-            </div>
-
-            {/* Models */}
-            <div className="flex flex-wrap items-start gap-4">
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileSelect}
-                accept="image/*,.pdf"
-                className="hidden"
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                disabled={discussion.status === 'running'}
-                className="p-2 rounded-lg border"
-                style={{ borderColor: 'var(--border-primary)', color: 'var(--text-secondary)' }}
-              >
-                <FileIcon />
-              </button>
-
-              <div className="flex-1 space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  {modelsByTier.flagship.map(model => {
-                    const disabled = file && (!model.supportsFiles || !model.fileTypes.includes(file.type));
-                    return (
-                      <button
-                        key={model.id}
-                        onClick={() => toggleModel(model.id)}
-                        disabled={discussion.status === 'running'}
-                        className={`px-3 py-1.5 rounded-full text-sm font-medium border ${disabled ? 'opacity-40' : ''}`}
-                        style={{
-                          backgroundColor: selectedModels.includes(model.id) ? model.color : 'var(--bg-secondary)',
-                          color: selectedModels.includes(model.id) ? '#fff' : 'var(--text-secondary)',
-                          borderColor: selectedModels.includes(model.id) ? model.color : 'var(--border-primary)',
-                        }}
-                      >
-                        {model.name}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {discussion.status === 'running' ? (
-                <button
-                  onClick={stopDiscussion}
-                  className="font-medium py-2 px-6 rounded-lg"
-                  style={{ backgroundColor: '#ef4444', color: '#fff' }}
-                >
-                  ⏹ Stop
-                </button>
-              ) : (
-                <button
-                  onClick={() => startDiscussion(thread.length > 0)}
-                  disabled={!question.trim() || selectedModels.length < 2}
-                  className="font-medium py-2 px-6 rounded-lg disabled:opacity-40"
-                  style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-text)' }}
-                >
-                  {thread.length > 0 ? 'Continue →' : 'Start'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+        {/* Old in-flow input area removed — input is now a fixed bar at the bottom of the viewport.
+            Hidden <input> for file picker still lives here so the ref is available. */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileSelect}
+          accept="image/*,.pdf"
+          className="hidden"
+        />
 
         {/* Excluded models warning */}
         {discussion.excludedModels.length > 0 && (
@@ -2285,6 +2173,152 @@ export default function Home() {
         )}
       </div>
     </main>
+
+    {/* ===== Floating model labels overlaid on the starmap =====
+        Position is by roughly where each model's "cluster" sits visually in idle/discussion modes.
+        pointer-events:none so they never block clicks on the starmap or controls. */}
+    {AVAILABLE_MODELS.map((m, i) => {
+      const positions = [
+        { left: '14%', top: '22%' },  // left
+        { left: '50%', top: '15%' },  // top center
+        { left: '86%', top: '22%' },  // right
+      ];
+      const isInDiscussion = discussion.status === 'running';
+      return (
+        <div
+          key={m.id}
+          className="fixed pointer-events-none z-[5] flex items-center gap-2 text-[11px] uppercase whitespace-nowrap select-none"
+          style={{
+            ...positions[i],
+            transform: 'translate(-50%, -50%)',
+            letterSpacing: '0.18em',
+            color: m.color,
+            textShadow: '0 0 14px rgba(0,0,0,0.85), 0 0 22px ' + m.color + '44',
+            transition: 'opacity 0.6s, filter 0.6s',
+            opacity: isInDiscussion ? 1 : 0.55,
+            filter: isInDiscussion ? 'brightness(1.4)' : 'none',
+          }}
+        >
+          <span
+            style={{
+              display: 'inline-block',
+              width: 8, height: 8, borderRadius: '50%',
+              background: m.color,
+              boxShadow: '0 0 12px ' + m.color + ', 0 0 4px ' + m.color,
+            }}
+          />
+          {m.name}
+        </div>
+      );
+    })}
+
+    {/* ===== Fixed bottom prompt bar (x.ai-style) =====
+        Centered, max-w-3xl on desktop, full-width with padding on mobile.
+        Single arrow button that toggles to a stop square while running. */}
+    <div
+      className="fixed bottom-0 left-0 right-0 z-20"
+      style={{
+        paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
+        paddingLeft: 12, paddingRight: 12, paddingTop: 24,
+        background: 'linear-gradient(to top, rgba(2,4,12,0.55) 30%, rgba(2,4,12,0) 100%)',
+      }}
+    >
+      <div className="mx-auto" style={{ maxWidth: 760 }}>
+        <div
+          className="flex items-end gap-2 rounded-3xl border px-3 py-2"
+          style={{
+            backgroundColor: 'var(--bg-secondary)',
+            borderColor: nsfwMode ? 'rgba(255,80,80,0.45)' : 'var(--border-primary)',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.45)',
+          }}
+        >
+          {/* File attach */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={discussion.status === 'running'}
+            className="p-2 rounded-full transition-opacity"
+            style={{ color: 'var(--text-tertiary)', opacity: discussion.status === 'running' ? 0.3 : 1 }}
+            aria-label="Attach file"
+          >
+            <FileIcon />
+          </button>
+
+          {/* Textarea: auto-grow 1-5 rows */}
+          <textarea
+            value={question}
+            onChange={e => setQuestion(e.target.value)}
+            placeholder={thread.length > 0 ? 'Ask a follow-up…' : 'Ask anything…'}
+            rows={1}
+            className="flex-1 bg-transparent focus:outline-none resize-none py-2 px-1"
+            style={{
+              color: 'var(--text-primary)',
+              fontSize: 16,
+              lineHeight: '24px',
+              maxHeight: 168, // ~7 lines
+              minHeight: 24,
+            }}
+            disabled={discussion.status === 'running'}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey && question.trim() && selectedModels.length >= 2) {
+                e.preventDefault();
+                startDiscussion(thread.length > 0);
+              }
+            }}
+            onInput={e => {
+              // Auto-resize: reset height then grow to scrollHeight up to maxHeight.
+              const ta = e.currentTarget;
+              ta.style.height = 'auto';
+              ta.style.height = Math.min(168, ta.scrollHeight) + 'px';
+            }}
+          />
+
+          {/* Send / Stop button */}
+          {discussion.status === 'running' ? (
+            <button
+              onClick={stopDiscussion}
+              className="rounded-full flex items-center justify-center transition-transform active:scale-95"
+              style={{ width: 36, height: 36, backgroundColor: '#ef4444', color: '#fff' }}
+              aria-label="Stop"
+            >
+              <StopIcon />
+            </button>
+          ) : (
+            <button
+              onClick={() => startDiscussion(thread.length > 0)}
+              disabled={!question.trim() || selectedModels.length < 2}
+              className="rounded-full flex items-center justify-center transition-all active:scale-95 disabled:opacity-30"
+              style={{
+                width: 36, height: 36,
+                backgroundColor: question.trim() ? 'var(--accent)' : 'var(--bg-tertiary)',
+                color: question.trim() ? 'var(--accent-text)' : 'var(--text-tertiary)',
+              }}
+              aria-label="Send"
+            >
+              <SendIcon />
+            </button>
+          )}
+        </div>
+
+        {/* File pill below the prompt */}
+        {file && (
+          <div
+            className="mt-2 mx-auto flex items-center gap-2 px-3 py-1.5 rounded-full text-xs"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              color: 'var(--text-secondary)',
+              width: 'fit-content',
+              maxWidth: '100%',
+            }}
+          >
+            <FileIcon />
+            <span className="truncate" style={{ maxWidth: 220 }}>{file.name}</span>
+            <button onClick={removeFile} className="ml-1" style={{ color: 'var(--text-tertiary)' }} aria-label="Remove file">
+              <CloseIcon />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
     </>
   );
 }
