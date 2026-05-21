@@ -578,12 +578,18 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
       if (labelsCur && labelsCur.length > 0) {
         const cx = W * 0.5, cy = H * 0.52;
         const labelActive = activeRef.current;
-        // 3 base anchor points; first three labels are used. Adjust if you want more labels later.
-        const baseAnchors = [
-          { x: W * 0.18, y: H * 0.28 },
-          { x: W * 0.50, y: H * 0.16 },
-          { x: W * 0.82, y: H * 0.28 },
-        ];
+        // Equilateral triangle anchored around the screen centre — labels are spread
+        // evenly at 120° (vertex up, then bottom-right, then bottom-left). Radius scales
+        // by min(W,H) so portrait phones don't bunch labels at the top, and landscape
+        // desktops don't push them off-screen.
+        const labelRadius = Math.min(W, H) * 0.32;
+        const angleOffset = -Math.PI / 2;             // first label at top
+        const baseAnchors: NodePos[] = [];
+        const labelCount = Math.min(labelsCur.length, 6); // up to 6 labels supported now
+        for (let i = 0; i < labelCount; i++) {
+          const a = angleOffset + (i * 2 * Math.PI) / labelCount;
+          baseAnchors.push({ x: cx + labelRadius * Math.cos(a), y: cy + labelRadius * Math.sin(a) });
+        }
         const cosR = Math.cos(rotation);
         const sinR = Math.sin(rotation);
         const labelFont = '600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
