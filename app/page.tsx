@@ -174,6 +174,15 @@ function CheckIcon() {
   );
 }
 
+function PlusIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+      <line x1="12" y1="5" x2="12" y2="19"/>
+      <line x1="5" y1="12" x2="19" y2="12"/>
+    </svg>
+  );
+}
+
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
     <svg
@@ -581,6 +590,25 @@ export default function Home() {
   const [selectedModels, setSelectedModels] = useState<string[]>(PRESETS.expert.models);
   const [activePreset, setActivePreset] = useState<string>('expert');
   const [thread, setThread] = useState<DiscussionEntry[]>([]);
+  // "+" menu in the prompt bar — opens upward, contains mode toggle, file, new thread, NSFW.
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const plusMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!plusMenuOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+        setPlusMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlusMenuOpen(false); };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [plusMenuOpen]);
+
   // Per-model card collapse state. Tap a card header to toggle.
   const [collapsedModels, setCollapsedModels] = useState<Set<string>>(new Set());
   const toggleCardCollapse = (modelId: string) => {
@@ -1527,65 +1555,10 @@ export default function Home() {
         active={discussion.status === 'running'}
       />
       <main className="min-h-screen transition-colors relative" style={{ backgroundColor: 'transparent', paddingBottom: 140 }}>
-      {/* Header */}
-      <header
-        className="border-b sticky top-0 z-10"
-        style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}
-      >
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center"
-              style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-text)' }}
-            >
-              <span className="text-sm font-bold">ai</span>
-            </div>
-            <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>Roundtable</span>
-            <span className="text-xs ml-1" style={{ color: 'var(--text-tertiary)' }}>v1.6.3</span>
-          </div>
-          <div className="flex items-center gap-4">
-            {/* Synthesis Mode Toggle */}
-            <button
-              onClick={toggleSynthesisMode}
-              disabled={discussion.status === 'running'}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${
-                discussion.status === 'running' ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'
-              }`}
-              style={{
-                backgroundColor: synthesisMode ? '#3b82f6' : 'var(--bg-tertiary)',
-                color: synthesisMode ? '#fff' : 'var(--text-secondary)',
-                borderColor: synthesisMode ? '#3b82f6' : 'var(--border-primary)',
-              }}
-              title={synthesisMode ? 'Synthesis Mode: Generate unified report' : 'Discussion Mode: Debate and vote'}
-            >
-              {synthesisMode ? '📝 Synthesis' : '💬 Discussion'}
-            </button>
-            {/* NSFW Toggle */}
-            <button
-              onClick={toggleNsfwMode}
-              disabled={discussion.status === 'running'}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all ${
-                discussion.status === 'running' ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'
-              }`}
-              style={{
-                backgroundColor: nsfwMode ? '#ef4444' : 'var(--bg-tertiary)',
-                color: nsfwMode ? '#fff' : 'var(--text-secondary)',
-                borderColor: nsfwMode ? '#ef4444' : 'var(--border-primary)',
-              }}
-              title={nsfwMode ? 'NSFW Mode: Models will roast each other' : 'Safe Mode: Normal discussion'}
-            >
-              {nsfwMode ? '🔥 NSFW' : '🔒 Safe'}
-            </button>
-            {hasActiveThread && (
-              <button onClick={startNewThread} className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                + New thread
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
+      {/* Header removed — all controls (mode toggle, file attach, new thread, NSFW)
+          now live inside the dropdown menu attached to the prompt's + button. */}
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-6 py-8 pt-12">
         {/* Thread history */}
         {thread.length > 0 && (
           <div className="mb-8 space-y-4">
@@ -2252,16 +2225,107 @@ export default function Home() {
             boxShadow: '0 10px 40px rgba(0,0,0,0.45)',
           }}
         >
-          {/* File attach */}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={discussion.status === 'running'}
-            className="p-2 rounded-full transition-opacity"
-            style={{ color: 'var(--text-tertiary)', opacity: discussion.status === 'running' ? 0.3 : 1 }}
-            aria-label="Attach file"
-          >
-            <FileIcon />
-          </button>
+          {/* + menu trigger.  Icon color reflects active modes:
+              synthesis on → orange, NSFW on → red (NSFW wins if both). */}
+          <div className="relative" ref={plusMenuRef}>
+            <button
+              onClick={() => setPlusMenuOpen(v => !v)}
+              disabled={discussion.status === 'running'}
+              className="p-2 rounded-full transition-all"
+              style={{
+                color: nsfwMode ? '#ef4444' : synthesisMode ? '#ff7a3d' : 'var(--text-tertiary)',
+                opacity: discussion.status === 'running' ? 0.3 : 1,
+                transform: plusMenuOpen ? 'rotate(45deg)' : 'rotate(0deg)',
+              }}
+              aria-label="Open menu"
+              aria-expanded={plusMenuOpen}
+            >
+              <PlusIcon />
+            </button>
+
+            {plusMenuOpen && (
+              <div
+                role="menu"
+                className="absolute bottom-full mb-3 left-0 rounded-2xl border p-1.5 shadow-2xl"
+                style={{
+                  backgroundColor: 'var(--bg-secondary)',
+                  borderColor: 'var(--border-primary)',
+                  minWidth: 240,
+                  animation: 'fade-in 0.15s ease-out',
+                }}
+              >
+                {/* Mode toggle group */}
+                <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
+                  Mode
+                </div>
+                <button
+                  role="menuitemradio"
+                  aria-checked={!synthesisMode}
+                  onClick={() => { if (synthesisMode) toggleSynthesisMode(); setPlusMenuOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5"
+                  style={{ color: 'var(--text-primary)' }}
+                >
+                  <span style={{ width: 18 }}>{!synthesisMode ? '✓' : ''}</span>
+                  <span className="flex-1 text-left">💬 Discussion</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>debate &amp; vote</span>
+                </button>
+                <button
+                  role="menuitemradio"
+                  aria-checked={synthesisMode}
+                  onClick={() => { if (!synthesisMode) toggleSynthesisMode(); setPlusMenuOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5"
+                  style={{ color: 'var(--text-primary)' }}
+                >
+                  <span style={{ width: 18 }}>{synthesisMode ? '✓' : ''}</span>
+                  <span className="flex-1 text-left">📝 Synthesis</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>unified report</span>
+                </button>
+
+                <div className="my-1 mx-2 border-t" style={{ borderColor: 'var(--border-secondary)' }} />
+
+                {/* Attach file */}
+                <button
+                  role="menuitem"
+                  onClick={() => { fileInputRef.current?.click(); setPlusMenuOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5"
+                  style={{ color: 'var(--text-primary)' }}
+                >
+                  <span style={{ width: 18, display: 'inline-flex', justifyContent: 'center' }}><FileIcon /></span>
+                  <span className="flex-1 text-left">Attach file</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>image / pdf</span>
+                </button>
+
+                {/* New thread */}
+                {hasActiveThread && (
+                  <button
+                    role="menuitem"
+                    onClick={() => { startNewThread(); setPlusMenuOpen(false); }}
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    <span style={{ width: 18, textAlign: 'center' }}>↺</span>
+                    <span className="flex-1 text-left">New thread</span>
+                    <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>clear context</span>
+                  </button>
+                )}
+
+                <div className="my-1 mx-2 border-t" style={{ borderColor: 'var(--border-secondary)' }} />
+
+                {/* NSFW toggle */}
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={nsfwMode}
+                  onClick={() => { toggleNsfwMode(); setPlusMenuOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors hover:bg-white/5"
+                  style={{ color: nsfwMode ? '#ef4444' : 'var(--text-primary)' }}
+                >
+                  <span style={{ width: 18 }}>{nsfwMode ? '✓' : ''}</span>
+                  <span className="flex-1 text-left">{nsfwMode ? '🔥 NSFW (on)' : '🔥 NSFW mode'}</span>
+                  <span className="text-[10px]" style={{ color: 'var(--text-tertiary)' }}>spicier debate</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Textarea: auto-grow 1-5 rows */}
           <textarea
