@@ -146,6 +146,10 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
     // ===== Organic motion =====
     // Slow accumulated rotation about screen centre — makes the network feel like it drifts.
     let rotation = 0;
+    // Fast independent rotation for the synthesis "pulsar" core: jets and orbiting labels.
+    // Decoupled from the main graph rotation so the core can spin visibly fast without
+    // turning the whole network into a blur.
+    let pulsarRotation = 0;
     // Periodic "thunderclap" wave events: scheduled per-node activations that fire over ~1-2s.
     // Creates the impression of a discharge crossing the network.
     const flashQueue: { nodeIdx: number; fireAt: number }[] = [];
@@ -466,8 +470,11 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
       const rotSpeed =
         currentMode === 'idle' ? 0.018 :
         currentMode === 'discussion' ? 0.04 :
-        0.09;
+        0.14;
       rotation += rotSpeed * dt;
+      // Pulsar spins ~6× faster than the graph in synthesis mode, otherwise dormant.
+      const pulsarSpeed = currentMode === 'synthesis' ? 0.85 : 0;
+      pulsarRotation += pulsarSpeed * dt;
 
       const breathPeriod = currentMode === 'idle' ? 6 : currentMode === 'discussion' ? 4 : 2.5;
       const breath = 1 + Math.sin((now / 1000) * (Math.PI * 2 / breathPeriod)) * 0.025;
@@ -636,17 +643,60 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
 
       if (currentMode === 'synthesis' && transitionT > 0.4) {
         const coreAlpha = (transitionT - 0.4) / 0.6;
+        const coreCX = W * 0.5;
+        const coreCY = H * 0.52;
         const coreR = 80 + Math.sin(now / 200) * 8;
-        // Black-hole core: a brighter, more compact glow at the centre that pulses.
-        // Drawn as a circle (not rect) so it reads cleanly against the dense collapsing nodes.
-        const coreG = ctx.createRadialGradient(W * 0.5, H * 0.52, 0, W * 0.5, H * 0.52, coreR);
-        coreG.addColorStop(0, `rgba(255, 245, 220, ${coreAlpha * 0.85})`);
+
+        // ---- Rotating pulsar jets ----
+        // Two opposing beams emanate from the centre and rotate at pulsarSpeed. They sweep
+        // around like a lighthouse, creating the "active galactic nucleus" feel.
+        const jetLen = Math.min(W, H) * 0.42;
+        const jetAlpha = coreAlpha * (0.45 + 0.25 * Math.sin(now / 140));
+        for (let j = 0; j < 2; j++) {
+          const a = pulsarRotation + j * Math.PI;
+          const ex = coreCX + Math.cos(a) * jetLen;
+          const ey = coreCY + Math.sin(a) * jetLen;
+          const jetG = ctx.createLinearGradient(coreCX, coreCY, ex, ey);
+          jetG.addColorStop(0, `rgba(255, 240, 220, ${jetAlpha})`);
+          jetG.addColorStop(0.15, `rgba(255, 170, 90, ${jetAlpha * 0.7})`);
+          jetG.addColorStop(0.5, `rgba(255, 90, 70, ${jetAlpha * 0.25})`);
+          jetG.addColorStop(1, 'rgba(255, 50, 80, 0)');
+          ctx.strokeStyle = jetG;
+          ctx.lineWidth = 14;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(coreCX, coreCY);
+          ctx.lineTo(ex, ey);
+          ctx.stroke();
+        }
+        // Secondary thinner accretion-arm: offset by 90° and slightly slower-looking via cos modulation
+        const arm2Alpha = coreAlpha * 0.35;
+        const armOffset = Math.PI / 2 + Math.sin(now / 600) * 0.3;
+        for (let j = 0; j < 2; j++) {
+          const a = pulsarRotation * 0.6 + armOffset + j * Math.PI;
+          const ex = coreCX + Math.cos(a) * jetLen * 0.55;
+          const ey = coreCY + Math.sin(a) * jetLen * 0.55;
+          const armG = ctx.createLinearGradient(coreCX, coreCY, ex, ey);
+          armG.addColorStop(0, `rgba(255, 220, 180, ${arm2Alpha})`);
+          armG.addColorStop(0.6, `rgba(255, 130, 80, ${arm2Alpha * 0.35})`);
+          armG.addColorStop(1, 'rgba(255, 60, 60, 0)');
+          ctx.strokeStyle = armG;
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.moveTo(coreCX, coreCY);
+          ctx.lineTo(ex, ey);
+          ctx.stroke();
+        }
+
+        // ---- Black-hole core glow on top of the jets ----
+        const coreG = ctx.createRadialGradient(coreCX, coreCY, 0, coreCX, coreCY, coreR);
+        coreG.addColorStop(0, `rgba(255, 245, 220, ${coreAlpha * 0.95})`);
         coreG.addColorStop(0.25, `rgba(255, 180, 100, ${coreAlpha * 0.55})`);
         coreG.addColorStop(0.6, `rgba(255, 90, 90, ${coreAlpha * 0.25})`);
         coreG.addColorStop(1, 'rgba(255, 50, 80, 0)');
         ctx.fillStyle = coreG;
         ctx.beginPath();
-        ctx.arc(W * 0.5, H * 0.52, coreR, 0, Math.PI * 2);
+        ctx.arc(coreCX, coreCY, coreR, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -679,6 +729,24 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
           if (sums[g].n > 0) baseAnchors.push({ x: sums[g].x / sums[g].n, y: sums[g].y / sums[g].n });
           else baseAnchors.push({ x: cx, y: cy });
         }
+
+        // In synthesis mode, blend the centroid anchors toward a tight orbit around the
+        // pulsar core. This makes labels "stick" to the active nucleus and visibly rotate
+        // with it, instead of trailing far out to the centroid of an extended branch.
+        if (currentMode === 'synthesis' && transitionT > 0.05) {
+          const pullStrength = Math.min(1, transitionT);
+          const orbitRadius = Math.min(W, H) * 0.13; // ~13% of viewport — close to core, outside the brightest glow
+          for (let g = 0; g < labelCount; g++) {
+            const orbitAngle = pulsarRotation + (g * (Math.PI * 2 / labelCount));
+            const orbitX = cx + Math.cos(orbitAngle) * orbitRadius;
+            const orbitY = cy + Math.sin(orbitAngle) * orbitRadius;
+            baseAnchors[g] = {
+              x: baseAnchors[g].x * (1 - pullStrength) + orbitX * pullStrength,
+              y: baseAnchors[g].y * (1 - pullStrength) + orbitY * pullStrength,
+            };
+          }
+        }
+
         const cosR = Math.cos(rotation);
         const sinR = Math.sin(rotation);
         const labelFont = '600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
