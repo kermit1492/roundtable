@@ -391,7 +391,9 @@ async function streamModel(
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[${actualModelId}] API error:`, response.status, errorText);
-      throw new Error(`API error: ${response.status}`);
+      // Include body in thrown message so the client UI surfaces the real reason
+      // (insufficient credits, invalid key, provider blocked, etc.) instead of just "403".
+      throw new Error(`API error: ${response.status} ${errorText.slice(0, 300)}`);
     }
 
     const reader = response.body?.getReader();
