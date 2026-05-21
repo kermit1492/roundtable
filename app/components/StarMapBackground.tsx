@@ -36,8 +36,24 @@ interface Node {
   twinkleSpeed: number;
   /** Transient flash activation (0..~1.2). Set by flash-wave events, decays each frame. */
   activation: number;
+  // Per-node organic drift — small Lissajous-style oscillation around the base position,
+  // so the graph keeps moving even when not transitioning between modes.
+  driftAmpX: number;
+  driftAmpY: number;
+  driftSpeedX: number;
+  driftSpeedY: number;
+  driftPhaseX: number;
+  driftPhaseY: number;
 }
-interface Edge { a: number; b: number; perpFrac: number; opacity: number; }
+interface Edge {
+  a: number;
+  b: number;
+  perpFrac: number;     // base curvature
+  opacity: number;
+  flowAmp: number;      // how much the curvature oscillates over time
+  flowSpeed: number;    // angular speed of the oscillation
+  flowPhase: number;    // initial phase
+}
 interface Pulse { edgeIdx: number; t: number; speed: number; dir: 1 | -1; hue: 'cool' | 'hot'; }
 
 const N_NODES = 380;
@@ -166,6 +182,13 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
           twinklePhase: Math.random() * Math.PI * 2,
           twinkleSpeed: 0.3 + Math.random() * 0.8,
           activation: 0,
+          // Lissajous drift: independent X/Y amplitudes/speeds give an organic non-circular wobble.
+          driftAmpX: 3 + Math.random() * 7,
+          driftAmpY: 3 + Math.random() * 7,
+          driftSpeedX: 0.18 + Math.random() * 0.35,
+          driftSpeedY: 0.20 + Math.random() * 0.38,
+          driftPhaseX: Math.random() * Math.PI * 2,
+          driftPhaseY: Math.random() * Math.PI * 2,
         });
       }
 
@@ -190,6 +213,9 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
               b: jj,
               perpFrac: (Math.random() - 0.5) * 0.35,
               opacity: 0.12 + Math.random() * 0.18,
+              flowAmp: 0.06 + Math.random() * 0.08,
+              flowSpeed: 0.18 + Math.random() * 0.30,
+              flowPhase: Math.random() * Math.PI * 2,
             });
           }
         }
@@ -204,7 +230,14 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
         const ddx = pa2.x - pb2.x, ddy = pa2.y - pb2.y;
         const dd = Math.sqrt(ddx * ddx + ddy * ddy);
         if (dd > 350) {
-          edges.push({ a, b, perpFrac: (Math.random() - 0.5) * 0.18, opacity: 0.08 + Math.random() * 0.1 });
+          edges.push({
+            a, b,
+            perpFrac: (Math.random() - 0.5) * 0.18,
+            opacity: 0.08 + Math.random() * 0.1,
+            flowAmp: 0.04 + Math.random() * 0.06,
+            flowSpeed: 0.12 + Math.random() * 0.22,
+            flowPhase: Math.random() * Math.PI * 2,
+          });
         }
       }
 
@@ -331,11 +364,19 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
       if (transitionT < 1) transitionT = Math.min(1, transitionT + dt / TRANSITION_DUR);
       const k = easeInOutCubic(transitionT);
 
+      // Drift is faster in higher-energy modes — graphs feel more "agitated" during synthesis.
+      const driftScale = currentMode === 'idle' ? 1.0 : currentMode === 'discussion' ? 1.5 : 2.1;
+      const tSecForDrift = now / 1000;
       for (let i = 0; i < nodes.length; i++) {
         const nd = nodes[i];
         const tgt = nd.positions[currentMode];
-        nd.current.x = nd.from.x + (tgt.x - nd.from.x) * k;
-        nd.current.y = nd.from.y + (tgt.y - nd.from.y) * k;
+        // Base position = lerp from old to new mode target
+        const baseX = nd.from.x + (tgt.x - nd.from.x) * k;
+        const baseY = nd.from.y + (tgt.y - nd.from.y) * k;
+        // Layered organic drift — Lissajous-like, each node has its own period/phase, so the
+        // whole network keeps gently rearranging without ever settling.
+        nd.current.x = baseX + Math.cos(tSecForDrift * nd.driftSpeedX + nd.driftPhaseX) * nd.driftAmpX * driftScale;
+        nd.current.y = baseY + Math.sin(tSecForDrift * nd.driftSpeedY + nd.driftPhaseY) * nd.driftAmpY * driftScale;
         // Decay transient flash activation so it visibly fades after the wave passes.
         if (nd.activation > 0) nd.activation *= Math.exp(-dt * 1.6);
       }
@@ -393,6 +434,7 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
 
       ctx.lineCap = 'round';
       ctx.lineWidth = 0.6;
+      const tEdges = now / 1000;
       for (let e = 0; e < edges.length; e++) {
         const ed = edges[e];
         const na = nodes[ed.a].current, nb = nodes[ed.b].current;
@@ -400,8 +442,11 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
         const len = Math.sqrt(dx * dx + dy * dy);
         if (len < 1) continue;
         const px = -dy / len, py = dx / len;
-        const mx = (na.x + nb.x) / 2 + px * len * ed.perpFrac;
-        const my = (na.y + nb.y) / 2 + py * len * ed.perpFrac;
+        // Edge curvature breathes over time — combined with node drift, this makes lines
+        // appear to weave and intertwine like neural fibres rather than stay rigid.
+        const dynPerp = ed.perpFrac + Math.sin(tEdges * ed.flowSpeed + ed.flowPhase) * ed.flowAmp;
+        const mx = (na.x + nb.x) / 2 + px * len * dynPerp;
+        const my = (na.y + nb.y) / 2 + py * len * dynPerp;
         if (currentMode === 'synthesis' && transitionT > 0.5) {
           const hot = (transitionT - 0.5) / 0.5;
           ctx.strokeStyle = `rgba(${Math.round(180 + hot * 60)}, ${Math.round(210 - hot * 70)}, ${Math.round(255 - hot * 150)}, ${ed.opacity})`;
@@ -459,8 +504,11 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
         const dx = nb.x - na.x, dy = nb.y - na.y;
         const len = Math.sqrt(dx * dx + dy * dy);
         const px = -dy / Math.max(1, len), py = dx / Math.max(1, len);
-        const midX = (na.x + nb.x) / 2 + px * len * ed.perpFrac;
-        const midY = (na.y + nb.y) / 2 + py * len * ed.perpFrac;
+        // Use the same time-varying curvature as the edge rendering, so the pulse rides on the
+        // actual visible curve instead of drifting off-line.
+        const dynPerp = ed.perpFrac + Math.sin(tEdges * ed.flowSpeed + ed.flowPhase) * ed.flowAmp;
+        const midX = (na.x + nb.x) / 2 + px * len * dynPerp;
+        const midY = (na.y + nb.y) / 2 + py * len * dynPerp;
         const tt = P.dir > 0 ? P.t : 1 - P.t;
         const omt = 1 - tt;
         const headX = omt * omt * na.x + 2 * omt * tt * midX + tt * tt * nb.x;
