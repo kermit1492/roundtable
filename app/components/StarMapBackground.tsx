@@ -58,6 +58,9 @@ interface Node {
   driftSpeedY: number;
   driftPhaseX: number;
   driftPhaseY: number;
+  /** Which model "owns" this node (0..NUM_GROUPS-1). Set by angle of idle position relative
+      to canvas centre — partitions the network into N sectors, one per model. */
+  group: number;
 }
 interface Edge {
   a: number;
@@ -68,7 +71,16 @@ interface Edge {
   flowSpeed: number;    // angular speed of the oscillation
   flowPhase: number;    // initial phase
 }
-interface Pulse { edgeIdx: number; t: number; speed: number; dir: 1 | -1; hue: 'cool' | 'hot'; }
+interface Pulse {
+  edgeIdx: number;
+  t: number;
+  speed: number;
+  dir: 1 | -1;
+  /** Hex colour inherited from the source node's model. */
+  color: string;
+}
+
+const NUM_GROUPS = 3;
 
 const N_NODES = 380;
 const TRANSITION_DUR = 1.6;
@@ -192,6 +204,15 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
         const brightness = 0.4 + Math.random() * 0.6;
         const size = 0.4 + Math.random() * Math.random() * 3.2;
 
+        // Partition by angle in idle layout so each model "owns" a sector of the network.
+        // Sectors are 120° each, first sector centred on top (-π/2).
+        const idleAngle = Math.atan2(idlePos.y - cy, idlePos.x - cx);
+        // Shift so that the first sector starts at -π/2 - π/3 = -5π/6 (top sector spans -π/2 ± π/3).
+        const shifted = idleAngle - (-5 * Math.PI / 6);
+        const TWO_PI = Math.PI * 2;
+        const normalized = ((shifted % TWO_PI) + TWO_PI) % TWO_PI;
+        const group = Math.floor(normalized / (TWO_PI / NUM_GROUPS)) % NUM_GROUPS;
+
         nodes.push({
           positions: { idle: idlePos, discussion: discPos, synthesis: synthPos },
           current: { ...idlePos },
@@ -209,6 +230,7 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
           driftSpeedY: 0.20 + Math.random() * 0.38,
           driftPhaseX: Math.random() * Math.PI * 2,
           driftPhaseY: Math.random() * Math.PI * 2,
+          group,
         });
       }
 
@@ -307,9 +329,26 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
       transitionT = 0;
     }
 
-    function pulseColorStr(hue: 'cool' | 'hot', alpha: number): string {
-      if (hue === 'cool') return `rgba(150, 220, 255, ${alpha})`;
-      return `rgba(255, 145, 90, ${alpha})`;
+    /** Convert "#RRGGBB" to "rgba(r,g,b,a)". Cached parse for performance. */
+    const colorCache = new Map<string, { r: number; g: number; b: number }>();
+    function parseHex(hex: string): { r: number; g: number; b: number } {
+      const cached = colorCache.get(hex);
+      if (cached) return cached;
+      const h = hex.startsWith('#') ? hex.slice(1) : hex;
+      const v = { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+      colorCache.set(hex, v);
+      return v;
+    }
+    function pulseColorStr(hex: string, alpha: number): string {
+      const c = parseHex(hex);
+      return `rgba(${c.r}, ${c.g}, ${c.b}, ${alpha})`;
+    }
+
+    /** Look up the colour assigned to a model group via the labels prop. Falls back to white. */
+    function groupColor(group: number): string {
+      const labelArr = labelsRef.current;
+      if (labelArr && labelArr[group]) return labelArr[group].color;
+      return '#ffffff';
     }
 
     /**
@@ -336,10 +375,6 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
       }
     }
 
-    function modePulseHue(): 'cool' | 'hot' {
-      return currentMode === 'synthesis' ? 'hot' : 'cool';
-    }
-
     function spawnPulse() {
       if (!edges.length) return;
       const idx = Math.floor(Math.random() * edges.length);
@@ -359,7 +394,11 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
       } else {
         dir = Math.random() < 0.5 ? 1 : -1;
       }
-      pulses.push({ edgeIdx: idx, t: 0, speed: speedFactor, dir, hue: modePulseHue() });
+      // Pulse colour = colour of the source-node's model group → impulses radiate
+      // outward in each model's signature colour.
+      const sourceNodeIdx = dir > 0 ? ed.a : ed.b;
+      const color = groupColor(nodes[sourceNodeIdx].group);
+      pulses.push({ edgeIdx: idx, t: 0, speed: speedFactor, dir, color });
     }
 
     function easeInOutCubic(x: number): number {
@@ -533,26 +572,40 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
         const omt = 1 - tt;
         const headX = omt * omt * na.x + 2 * omt * tt * midX + tt * tt * nb.x;
         const headY = omt * omt * na.y + 2 * omt * tt * midY + tt * tt * nb.y;
-        const TRAIL = 8;
+
+        // Pronounced fade-out: quick fade-in (first 10% of life), then a long quadratic fade-out
+        // (remaining 90%). Curve exponent ~2 makes the head visibly dim before disappearing.
+        const fade = P.t < 0.10
+          ? P.t / 0.10
+          : Math.pow(1 - (P.t - 0.10) / 0.90, 1.8);
+
+        // Longer comet-style trail (12 segments) reinforces the fade-out sensation.
+        const TRAIL = 12;
         for (let tr = 0; tr < TRAIL; tr++) {
           const tProg = tt - tr * 0.012;
           if (tProg < 0) break;
           const omt2 = 1 - tProg;
           const tx = omt2 * omt2 * na.x + 2 * omt2 * tProg * midX + tProg * tProg * nb.x;
           const ty = omt2 * omt2 * na.y + 2 * omt2 * tProg * midY + tProg * tProg * nb.y;
-          const trAlpha = (1 - tr / TRAIL) * 0.45 * opacity;
-          const trSize = (1 - tr / TRAIL) * 1.6 + 0.4;
-          ctx.fillStyle = pulseColorStr(P.hue, trAlpha);
+          const trAlpha = (1 - tr / TRAIL) * 0.45 * opacity * fade;
+          const trSize = (1 - tr / TRAIL) * 1.7 + 0.4;
+          ctx.fillStyle = pulseColorStr(P.color, trAlpha);
           ctx.beginPath();
           ctx.arc(tx, ty, trSize, 0, Math.PI * 2);
           ctx.fill();
         }
-        ctx.fillStyle = pulseColorStr(P.hue, opacity);
+        ctx.fillStyle = pulseColorStr(P.color, opacity * fade);
         ctx.beginPath();
         ctx.arc(headX, headY, 1.6, 0, Math.PI * 2);
         ctx.fill();
-        ctx.globalAlpha = 0.6 * opacity;
-        ctx.drawImage(HALO_TEX, headX - 5, headY - 5, 10, 10);
+        ctx.globalAlpha = 0.65 * opacity * fade;
+        // Halo sprite tinted to the model colour by setting `fillStyle`'s shadow context;
+        // drawImage doesn't tint, so we paint a small radial gradient instead for halo glow.
+        const halo = ctx.createRadialGradient(headX, headY, 0, headX, headY, 7);
+        halo.addColorStop(0, pulseColorStr(P.color, 0.85));
+        halo.addColorStop(1, pulseColorStr(P.color, 0));
+        ctx.fillStyle = halo;
+        ctx.fillRect(headX - 7, headY - 7, 14, 14);
         ctx.globalAlpha = opacity;
       }
 
@@ -578,17 +631,23 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
       if (labelsCur && labelsCur.length > 0) {
         const cx = W * 0.5, cy = H * 0.52;
         const labelActive = activeRef.current;
-        // Equilateral triangle anchored around the screen centre — labels are spread
-        // evenly at 120° (vertex up, then bottom-right, then bottom-left). Radius scales
-        // by min(W,H) so portrait phones don't bunch labels at the top, and landscape
-        // desktops don't push them off-screen.
-        const labelRadius = Math.min(W, H) * 0.32;
-        const angleOffset = -Math.PI / 2;             // first label at top
+        // Compute centroid (current position) of each model's group of nodes — labels
+        // anchor at the visual centre of mass of their cluster, so they move with their
+        // sub-network and stay roughly inside the cluster on every mode.
+        const labelCount = Math.min(labelsCur.length, NUM_GROUPS);
         const baseAnchors: NodePos[] = [];
-        const labelCount = Math.min(labelsCur.length, 6); // up to 6 labels supported now
-        for (let i = 0; i < labelCount; i++) {
-          const a = angleOffset + (i * 2 * Math.PI) / labelCount;
-          baseAnchors.push({ x: cx + labelRadius * Math.cos(a), y: cy + labelRadius * Math.sin(a) });
+        const sums = new Array(labelCount).fill(0).map(() => ({ x: 0, y: 0, n: 0 }));
+        for (let i = 0; i < nodes.length; i++) {
+          const g = nodes[i].group;
+          if (g >= 0 && g < labelCount) {
+            sums[g].x += nodes[i].current.x;
+            sums[g].y += nodes[i].current.y;
+            sums[g].n++;
+          }
+        }
+        for (let g = 0; g < labelCount; g++) {
+          if (sums[g].n > 0) baseAnchors.push({ x: sums[g].x / sums[g].n, y: sums[g].y / sums[g].n });
+          else baseAnchors.push({ x: cx, y: cy });
         }
         const cosR = Math.cos(rotation);
         const sinR = Math.sin(rotation);
