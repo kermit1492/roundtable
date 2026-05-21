@@ -196,10 +196,19 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1, l
           ? sampleCluster(discClusters[Math.floor(Math.random() * discClusters.length)], 2.5)
           : { x: Math.random() * W, y: Math.random() * H };
 
-        const sAngle = Math.random() * Math.PI * 2;
-        const rT = Math.pow(Math.random(), 1.8);
-        const sDist = rT * maxR;
-        const synthPos = { x: cx + Math.cos(sAngle) * sDist, y: cy + Math.sin(sAngle) * sDist };
+        // Synthesis = "black hole" compression. Outer nodes (branches) stay put — the graph
+        // still fills the screen. Inner nodes get pulled hard toward the centre, forming a
+        // dense core. This preserves the network's extent but creates strong gravity-like focus.
+        const synthAngleSrc = Math.atan2(idlePos.y - cy, idlePos.x - cx);
+        const idleRadius = Math.hypot(idlePos.x - cx, idlePos.y - cy);
+        const rNorm = Math.min(1, idleRadius / maxR); // 0 = at centre, 1 = at far edge
+        // Smoothstep from 0.08 (heavy compression near centre) to 1.0 (no compression for outer nodes).
+        // Below rNorm=0.25 → strong pull; above rNorm=0.75 → barely move; smooth in between.
+        const cT = Math.max(0, Math.min(1, (rNorm - 0.25) / 0.5));
+        const cSmooth = cT * cT * (3 - 2 * cT);
+        const compression = 0.08 + cSmooth * 0.92; // 0.08 at core → 1.0 at edge
+        const synthRadius = idleRadius * compression;
+        const synthPos = { x: cx + Math.cos(synthAngleSrc) * synthRadius, y: cy + Math.sin(synthAngleSrc) * synthRadius };
 
         const brightness = 0.4 + Math.random() * 0.6;
         const size = 0.4 + Math.random() * Math.random() * 3.2;

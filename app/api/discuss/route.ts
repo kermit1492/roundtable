@@ -242,15 +242,16 @@ async function callModel(
   messages: { role: string; content: string | object }[],
   maxTokens: number = MAX_RESPONSE_TOKENS,
   temperature: number = 0.7,
-  retries: number = 3
+  retries: number = 3,
+  timeoutMs: number = 180000 // per-attempt timeout; default 180s for reasoning models
 ): Promise<string> {
   const actualModelId = getActualModelId(modelId);
   const modelName = getModelName(modelId);
-  
+
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 180000); // 180 sec timeout (reasoning models need more)
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       
       if (attempt > 1) {
         console.log(`[${modelName}] Retry attempt ${attempt}/${retries}...`);
@@ -1423,10 +1424,10 @@ async function handleSynthesisMode(
     .replace('{reviews}', winnerReviews)
     .replace('{improvements}', allImprovements.join('\n- ') || 'No specific improvements suggested');
 
-  // Finalize budget: reserve 90s for signoff phase. If we have <60s left, skip finalize
-  // entirely and emit the winner's draft as the final synthesis. Otherwise race the
-  // streamModel against a deadline that falls back to the winner's draft gracefully.
-  const finalizeDeadline = Math.max(0, remainingBudget() - 90000);
+  // Finalize budget: reserve 50s for signoff phase + cleanup (signoff is now capped at 35s).
+  // If we have <60s left, skip finalize entirely and emit the winner's draft as the final
+  // synthesis. Otherwise race the streamModel against a deadline that falls back to draft.
+  const finalizeDeadline = Math.max(0, remainingBudget() - 50000);
   console.log(`[Phase:finalize] budget=${finalizeDeadline}ms, remaining=${remainingBudget()}ms`);
 
   let finalSynthesis = '';
@@ -1478,69 +1479,89 @@ async function handleSynthesisMode(
   }
 
   // ==================== PHASE 6: Sign-off and Collect Differences ====================
+  // Signoff is best-effort decoration on the synthesis. If we're nearly out of Vercel budget,
+  // skip it entirely and emit synthesis_complete with default approvals — better to ship the
+  // synthesis than die mid-signoff and leave the user staring at "awaiting model sign-offs".
   send('signoff_start', { models: analyses.map(a => a.modelName) });
 
   const signoffs: { modelId: string; modelName: string; signoff: { approved: boolean; confidence: number; remaining_differences: { topic: string; my_position: string; synthesis_position: string; importance: string }[] } }[] = [];
 
-  const signoffPromises = analyses.map(async (analysis) => {
-    const signoffPrompt = SYNTHESIS_SIGNOFF_PROMPT
-      .replace('{model_name}', analysis.modelName)
-      .replace('{synthesis}', finalSynthesis)
-      .replace('{my_analysis}', analysis.content);
-
-    try {
-      const response = await callModel(
-        analysis.modelId,
-        [
-          { role: 'system', content: signoffPrompt },
-          { role: 'user', content: 'Provide your sign-off on the final synthesis.' }
-        ],
-        2000,
-        0.3
-      );
-
-      // Parse JSON response
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(sanitizeJsonString(jsonMatch[0]));
-        send('signoff_complete', { model: analysis.modelName, approved: parsed.approved ?? true });
-        return {
-          modelId: analysis.modelId,
-          modelName: analysis.modelName,
-          signoff: {
-            approved: parsed.approved ?? true,
-            confidence: parsed.confidence ?? 0.8,
-            remaining_differences: parsed.remaining_differences || []
-          }
-        };
-      }
-    } catch (error) {
-      console.error(`[${analysis.modelName}] Sign-off failed:`, error);
+  // Hard threshold: need at least 35s to attempt real signoffs (callModel per-attempt timeout
+  // is now 30s; we need a little margin). Otherwise fall back to defaults immediately.
+  const signoffCallTimeout = 30000;
+  if (remainingBudget() < 35000) {
+    console.warn(`[Phase:signoff] only ${remainingBudget()}ms left, skipping real signoffs`);
+    for (const a of analyses) {
+      signoffs.push({
+        modelId: a.modelId,
+        modelName: a.modelName,
+        signoff: { approved: true, confidence: 0.7, remaining_differences: [] },
+      });
+      send('signoff_complete', { model: a.modelName, approved: true, fallback: true, skipped: true });
     }
-    send('signoff_complete', { model: analysis.modelName, approved: true, fallback: true });
-    return {
-      modelId: analysis.modelId,
-      modelName: analysis.modelName,
-      signoff: { approved: true, confidence: 0.7, remaining_differences: [] }
-    };
-  });
+  } else {
+    const signoffPromises = analyses.map(async (analysis) => {
+      const signoffPrompt = SYNTHESIS_SIGNOFF_PROMPT
+        .replace('{model_name}', analysis.modelName)
+        .replace('{synthesis}', finalSynthesis)
+        .replace('{my_analysis}', analysis.content);
 
-  // Phase deadline: whatever's left, capped at 90s (each sign-off is just a JSON callModel).
-  // If we have <15s left, signoffs are all fallback-default approvals.
-  const signoffDeadline = Math.min(90000, Math.max(15000, remainingBudget() - 5000));
-  console.log(`[Phase:signoff] budget=${signoffDeadline}ms, remaining=${remainingBudget()}ms`);
-  const signoffResults = await runPhase(
-    'signoff',
-    signoffPromises,
-    signoffDeadline,
-    (i) => ({
-      modelId: analyses[i].modelId,
-      modelName: analyses[i].modelName,
-      signoff: { approved: true, confidence: 0.7, remaining_differences: [] },
-    }),
-    send,
-  );
-  signoffs.push(...signoffResults);
+      try {
+        const response = await callModel(
+          analysis.modelId,
+          [
+            { role: 'system', content: signoffPrompt },
+            { role: 'user', content: 'Provide your sign-off on the final synthesis.' }
+          ],
+          2000,
+          0.3,
+          1,                  // retries = 1 (no retries; we don't have time)
+          signoffCallTimeout, // 30s per attempt
+        );
+
+        // Parse JSON response
+        const jsonMatch = response.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(sanitizeJsonString(jsonMatch[0]));
+          send('signoff_complete', { model: analysis.modelName, approved: parsed.approved ?? true });
+          return {
+            modelId: analysis.modelId,
+            modelName: analysis.modelName,
+            signoff: {
+              approved: parsed.approved ?? true,
+              confidence: parsed.confidence ?? 0.8,
+              remaining_differences: parsed.remaining_differences || []
+            }
+          };
+        }
+      } catch (error) {
+        console.error(`[${analysis.modelName}] Sign-off failed:`, error);
+      }
+      send('signoff_complete', { model: analysis.modelName, approved: true, fallback: true });
+      return {
+        modelId: analysis.modelId,
+        modelName: analysis.modelName,
+        signoff: { approved: true, confidence: 0.7, remaining_differences: [] }
+      };
+    });
+
+    // Phase deadline: cap at 35s. Signoff is the LAST thing before synthesis_complete —
+    // we cannot afford to overrun. Anything still pending past the deadline gets default approval.
+    const signoffDeadline = Math.min(35000, Math.max(10000, remainingBudget() - 10000));
+    console.log(`[Phase:signoff] budget=${signoffDeadline}ms, remaining=${remainingBudget()}ms`);
+    const signoffResults = await runPhase(
+      'signoff',
+      signoffPromises,
+      signoffDeadline,
+      (i) => ({
+        modelId: analyses[i].modelId,
+        modelName: analyses[i].modelName,
+        signoff: { approved: true, confidence: 0.7, remaining_differences: [] },
+      }),
+      send,
+    );
+    signoffs.push(...signoffResults);
+  }
 
   // Extract and format differences - collect all positions on each topic
   const differences: PointOfDifference[] = [];
