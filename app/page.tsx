@@ -751,10 +751,10 @@ export default function Home() {
     if (discussion.status !== 'running') return;
 
     // Server sends a heartbeat every 10s and a phase_progress event whenever a model
-    // settles inside a synthesis phase. So lastActivityTime should refresh constantly while
-    // the function is alive. If we go 90s with NO activity, the function has very likely died
-    // (Vercel killed it, connection dropped, etc.) — show stuck and let the user retry.
-    const STUCK_THRESHOLD_MS = 90000;
+    // settles inside a synthesis phase. SSE events can be buffered briefly on Vercel/CDN,
+    // so we wait 180s of total silence before declaring the function dead — that's 18 missed
+    // heartbeats, well past any reasonable buffering window.
+    const STUCK_THRESHOLD_MS = 180000;
     const checkInterval = setInterval(() => {
       const timeSinceActivity = Date.now() - discussion.lastActivityTime;
       if (timeSinceActivity > STUCK_THRESHOLD_MS && !discussion.isStuck) {
@@ -1664,7 +1664,7 @@ export default function Home() {
                 style={{ backgroundColor: '#fef3c7', borderColor: '#f59e0b' }}
               >
                 <span className="text-sm" style={{ color: '#92400e' }}>
-                  ⚠️ Discussion appears stuck — no heartbeat from server for 90+ seconds
+                  ⚠️ Discussion appears stuck — no heartbeat from server for 3+ minutes
                 </span>
                 <button
                   onClick={stopDiscussion}

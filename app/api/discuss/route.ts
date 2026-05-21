@@ -1044,6 +1044,14 @@ async function handleSynthesisMode(
     'google/gemini-3.5-flash': '#4d8eff',
   };
 
+  // Time budget tracker. Vercel maxDuration=800s; we reserve 80s for cleanup/headroom,
+  // giving the synthesis pipeline 720s of usable budget. Each phase computes
+  // `remaining = SYNTHESIS_HARD_BUDGET_MS - (Date.now() - synthesisStartTime)`
+  // and caps its own deadline so it never starves the next phase.
+  const synthesisStartTime = Date.now();
+  const SYNTHESIS_HARD_BUDGET_MS = 720000;
+  const remainingBudget = () => Math.max(0, SYNTHESIS_HARD_BUDGET_MS - (Date.now() - synthesisStartTime));
+
   send('synthesis_mode_started', { question, models: models.map(m => getModelName(m)) });
 
   // ==================== PHASE 1: Initial Analysis ====================
@@ -1083,11 +1091,13 @@ async function handleSynthesisMode(
     }
   });
 
-  // Phase deadline: 4 minutes for analysis. If 2+ models complete we proceed.
+  // Phase deadline: at most 3 min (analysis is heavy, parallel). Reserve 540s for later phases.
+  const analysisDeadline = Math.min(180000, Math.max(60000, remainingBudget() - 540000));
+  console.log(`[Phase:analysis] budget=${analysisDeadline}ms, remaining=${remainingBudget()}ms`);
   const analysisResults = await runPhase(
     'analysis',
     analysisPromises,
-    240000,
+    analysisDeadline,
     (i) => ({ modelId: models[i], modelName: getModelName(models[i]), content: 'Error: analysis phase timeout' }),
     send,
   );
@@ -1147,12 +1157,13 @@ async function handleSynthesisMode(
     }
   });
 
-  // Phase deadline: 4 minutes for all drafts. If a model is still pending past that,
-  // abandon it and proceed with whoever finished (drafts.length < 2 check below catches the bad case).
+  // Phase deadline: at most 3 min, reserve 360s for later (reviews + vote + finalize + signoff).
+  const draftsDeadline = Math.min(180000, Math.max(60000, remainingBudget() - 360000));
+  console.log(`[Phase:drafts] budget=${draftsDeadline}ms, remaining=${remainingBudget()}ms`);
   const draftResults = await runPhase(
     'drafts',
     draftPromises,
-    240000,
+    draftsDeadline,
     (i) => ({ modelId: analyses[i].modelId, modelName: analyses[i].modelName, draft: '' }),
     send,
   );
@@ -1230,13 +1241,13 @@ async function handleSynthesisMode(
     }
   }
 
-  // Phase deadline: 3 minutes for the entire review fan-out.
-  // If one reviewer (e.g. GPT-5.5 Pro reasoning) is silent, we still proceed with whatever
-  // we got — the voting phase weights by available reviews + draft quality.
+  // Phase deadline: at most 2 min, reserve 240s for vote + finalize + signoff.
+  const reviewsDeadline = Math.min(120000, Math.max(45000, remainingBudget() - 240000));
+  console.log(`[Phase:reviews] budget=${reviewsDeadline}ms, remaining=${remainingBudget()}ms`);
   const reviewResults = await runPhase(
     'reviews',
     reviewPromises,
-    180000,
+    reviewsDeadline,
     (i): ReviewResult => ({
       reviewerId: reviewPairs[i].reviewer.modelId,
       reviewerName: reviewPairs[i].reviewer.modelName,
@@ -1328,11 +1339,13 @@ async function handleSynthesisMode(
     };
   });
 
-  // Phase deadline: 90s for voting (callModel timeout is 180s; deadline forces moving on)
+  // Phase deadline: 60s for voting (callModel timeout is 180s; deadline forces moving on)
+  const votingDeadline = Math.min(60000, Math.max(30000, remainingBudget() - 180000));
+  console.log(`[Phase:voting] budget=${votingDeadline}ms, remaining=${remainingBudget()}ms`);
   const voteResults = await runPhase(
     'voting',
     votePromises,
-    90000,
+    votingDeadline,
     (i): SynthesisVote => {
       const voter = drafts[i];
       const defaultVote = drafts.find(d => d.modelId !== voter.modelId)?.modelName || drafts[0].modelName;
@@ -1410,25 +1423,58 @@ async function handleSynthesisMode(
     .replace('{reviews}', winnerReviews)
     .replace('{improvements}', allImprovements.join('\n- ') || 'No specific improvements suggested');
 
+  // Finalize budget: reserve 90s for signoff phase. If we have <60s left, skip finalize
+  // entirely and emit the winner's draft as the final synthesis. Otherwise race the
+  // streamModel against a deadline that falls back to the winner's draft gracefully.
+  const finalizeDeadline = Math.max(0, remainingBudget() - 90000);
+  console.log(`[Phase:finalize] budget=${finalizeDeadline}ms, remaining=${remainingBudget()}ms`);
+
   let finalSynthesis = '';
-  try {
-    await streamModel(
-      winner.modelId,
-      [
-        { role: 'system', content: finalizePrompt },
-        { role: 'user', content: 'You won the vote! Incorporate the feedback and produce the final synthesis.' }
-      ],
-      (token) => {
-        finalSynthesis += token;
-        send('finalization_token', { token });
-      },
-      12000,
-      240000 // 4 min timeout for finalization (was 6 min; phase budget is now bounded)
-    );
-  } catch (error) {
-    console.error(`[${winner.modelName}] Finalization failed:`, error);
-    // Fall back to winner's original draft
+
+  if (finalizeDeadline < 60000) {
+    // Not enough time to finalize properly — fall back to winner's draft now.
+    console.warn(`[Phase:finalize] budget too low (${finalizeDeadline}ms), using winner's draft as final`);
     finalSynthesis = winner.draft;
+    send('finalization_token', { token: winner.draft });
+    send('phase_progress', { phase: 'finalize', completed: 1, total: 1, skipped: true });
+  } else {
+    const finalizePromise = (async () => {
+      try {
+        await streamModel(
+          winner.modelId,
+          [
+            { role: 'system', content: finalizePrompt },
+            { role: 'user', content: 'You won the vote! Incorporate the feedback and produce the final synthesis.' }
+          ],
+          (token) => {
+            finalSynthesis += token;
+            send('finalization_token', { token });
+          },
+          12000,
+          Math.min(240000, finalizeDeadline) // cap per-stream timeout by remaining budget
+        );
+        return true;
+      } catch (error) {
+        console.error(`[${winner.modelName}] Finalization stream failed:`, error);
+        return false;
+      }
+    })();
+
+    let deadlineTimer: NodeJS.Timeout | undefined;
+    const deadlineHit = new Promise<'DEADLINE'>(resolve => {
+      deadlineTimer = setTimeout(() => resolve('DEADLINE'), finalizeDeadline);
+    });
+    const raced = await Promise.race([finalizePromise.then(() => 'DONE' as const), deadlineHit]);
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+
+    if (raced === 'DEADLINE' || finalSynthesis.length < 100) {
+      // Stream didn't deliver enough content in time — fall back to winner's draft
+      console.warn(`[Phase:finalize] deadline=${raced}, got ${finalSynthesis.length} chars; falling back to winner draft`);
+      finalSynthesis = winner.draft;
+      send('phase_progress', { phase: 'finalize', completed: 1, total: 1, timeout: true });
+    } else {
+      send('phase_progress', { phase: 'finalize', completed: 1, total: 1 });
+    }
   }
 
   // ==================== PHASE 6: Sign-off and Collect Differences ====================
@@ -1479,11 +1525,14 @@ async function handleSynthesisMode(
     };
   });
 
-  // Phase deadline: 90s for sign-offs (each is just a JSON callModel)
+  // Phase deadline: whatever's left, capped at 90s (each sign-off is just a JSON callModel).
+  // If we have <15s left, signoffs are all fallback-default approvals.
+  const signoffDeadline = Math.min(90000, Math.max(15000, remainingBudget() - 5000));
+  console.log(`[Phase:signoff] budget=${signoffDeadline}ms, remaining=${remainingBudget()}ms`);
   const signoffResults = await runPhase(
     'signoff',
     signoffPromises,
-    90000,
+    signoffDeadline,
     (i) => ({
       modelId: analyses[i].modelId,
       modelName: analyses[i].modelName,
