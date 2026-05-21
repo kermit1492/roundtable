@@ -10,6 +10,11 @@ import { useEffect, useRef } from 'react';
 
 export type StarMapMode = 'idle' | 'discussion' | 'synthesis';
 
+export interface StarMapLabel {
+  name: string;
+  color: string;
+}
+
 interface Props {
   mode: StarMapMode;
   /**
@@ -22,6 +27,15 @@ interface Props {
    * overpower the rest of the UI. Defaults to 1.
    */
   opacity?: number;
+  /**
+   * Model labels rendered as part of the network. Their positions rotate and breathe
+   * together with the starmap, but the text itself stays upright for readability.
+   */
+  labels?: StarMapLabel[];
+  /**
+   * When true (discussion running), labels brighten and pulse subtly.
+   */
+  active?: boolean;
 }
 
 interface NodePos { x: number; y: number; }
@@ -60,14 +74,20 @@ const N_NODES = 380;
 const TRANSITION_DUR = 1.6;
 const MAX_PULSES = 280;
 
-export default function StarMapBackground({ mode, enabled = true, opacity = 1 }: Props) {
+export default function StarMapBackground({ mode, enabled = true, opacity = 1, labels, active = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const modeRequestRef = useRef<{ target: StarMapMode; tick: number }>({ target: mode, tick: 0 });
+  // The animation loop reads labels/active through refs so the rAF loop doesn't restart on prop change.
+  const labelsRef = useRef<StarMapLabel[] | undefined>(labels);
+  const activeRef = useRef<boolean>(active);
 
   // Bump the request tick whenever the prop changes; the animation loop picks it up.
   useEffect(() => {
     modeRequestRef.current = { target: mode, tick: modeRequestRef.current.tick + 1 };
   }, [mode]);
+
+  useEffect(() => { labelsRef.current = labels; }, [labels]);
+  useEffect(() => { activeRef.current = active; }, [active]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -549,6 +569,60 @@ export default function StarMapBackground({ mode, enabled = true, opacity = 1 }:
 
       // Restore the world transform applied at the start of the drawing block.
       ctx.restore();
+
+      // ===== Model labels =====
+      // Labels are positioned outside the rotation/scale transform, but their COORDS are
+      // computed by rotating/scaling base anchor points about the same centre. The text itself
+      // stays upright (no glyph rotation) for readability, while the position moves with the network.
+      const labelsCur = labelsRef.current;
+      if (labelsCur && labelsCur.length > 0) {
+        const cx = W * 0.5, cy = H * 0.52;
+        const labelActive = activeRef.current;
+        // 3 base anchor points; first three labels are used. Adjust if you want more labels later.
+        const baseAnchors = [
+          { x: W * 0.18, y: H * 0.28 },
+          { x: W * 0.50, y: H * 0.16 },
+          { x: W * 0.82, y: H * 0.28 },
+        ];
+        const cosR = Math.cos(rotation);
+        const sinR = Math.sin(rotation);
+        const labelFont = '600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.save();
+        ctx.font = labelFont;
+        ctx.textBaseline = 'middle';
+        for (let i = 0; i < Math.min(labelsCur.length, baseAnchors.length); i++) {
+          const label = labelsCur[i];
+          const base = baseAnchors[i];
+          // Rotate the anchor position about (cx, cy), then apply breathing scale.
+          const dx = base.x - cx, dy = base.y - cy;
+          const ax = cx + (dx * cosR - dy * sinR) * breath;
+          const ay = cy + (dx * sinR + dy * cosR) * breath;
+          // Active labels brighten and pulse gently.
+          const pulseAlpha = labelActive
+            ? 0.82 + Math.sin(now / 380 + i * 1.5) * 0.18
+            : 0.55;
+          ctx.globalAlpha = pulseAlpha * opacity;
+          // Measure to centre dot + text group around the anchor.
+          const text = label.name.toUpperCase();
+          const textW = ctx.measureText(text).width;
+          const dotR = 4;
+          const gap = 8;
+          const totalW = dotR * 2 + gap + textW;
+          const startX = ax - totalW / 2;
+          // Glow dot
+          ctx.shadowColor = label.color;
+          ctx.shadowBlur = 16;
+          ctx.fillStyle = label.color;
+          ctx.beginPath();
+          ctx.arc(startX + dotR, ay, dotR, 0, Math.PI * 2);
+          ctx.fill();
+          // Text — glow comes from the same shadow setup.
+          ctx.shadowBlur = 12;
+          ctx.fillText(text, startX + dotR * 2 + gap, ay);
+        }
+        ctx.restore();
+        ctx.globalAlpha = opacity;
+      }
 
       ctx.globalAlpha = 1;
       rafId = requestAnimationFrame(tick);

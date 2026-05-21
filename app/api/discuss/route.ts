@@ -969,7 +969,7 @@ async function handleSynthesisMode(
   const MODEL_COLORS: Record<string, string> = {
     'openai/gpt-5.5-pro': '#10b981',
     'anthropic/claude-opus-4.7': '#f59e0b',
-    'google/gemini-3.5-flash': '#34a853',
+    'google/gemini-3.5-flash': '#4d8eff',
   };
 
   send('synthesis_mode_started', { question, models: models.map(m => getModelName(m)) });

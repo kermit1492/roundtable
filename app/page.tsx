@@ -9,7 +9,7 @@ import StarMapBackground, { type StarMapMode } from './components/StarMapBackgro
 const AVAILABLE_MODELS = [
   { id: 'openai/gpt-5.5-pro', name: 'GPT-5.5 Pro', color: '#10b981', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
   { id: 'anthropic/claude-opus-4.7', name: 'Claude Opus 4.7', color: '#f59e0b', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
-  { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash', color: '#34a853', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
+  { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash', color: '#4d8eff', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
 ];
 
 const PRESETS = {
@@ -170,6 +170,18 @@ function CheckIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  );
+}
+
+function ChevronIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      width="16" height="16" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
+      style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}
+    >
+      <polyline points="6 9 12 15 18 9"/>
     </svg>
   );
 }
@@ -569,6 +581,15 @@ export default function Home() {
   const [selectedModels, setSelectedModels] = useState<string[]>(PRESETS.expert.models);
   const [activePreset, setActivePreset] = useState<string>('expert');
   const [thread, setThread] = useState<DiscussionEntry[]>([]);
+  // Per-model card collapse state. Tap a card header to toggle.
+  const [collapsedModels, setCollapsedModels] = useState<Set<string>>(new Set());
+  const toggleCardCollapse = (modelId: string) => {
+    setCollapsedModels(prev => {
+      const next = new Set(prev);
+      if (next.has(modelId)) next.delete(modelId); else next.add(modelId);
+      return next;
+    });
+  };
   const [file, setFile] = useState<FileAttachment | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportingLaTeX, setExportingLaTeX] = useState(false);
@@ -1500,7 +1521,11 @@ export default function Home() {
 
   return (
     <>
-      <StarMapBackground mode={networkMode} />
+      <StarMapBackground
+        mode={networkMode}
+        labels={AVAILABLE_MODELS.map(m => ({ name: m.name, color: m.color }))}
+        active={discussion.status === 'running'}
+      />
       <main className="min-h-screen transition-colors relative" style={{ backgroundColor: 'transparent', paddingBottom: 140 }}>
       {/* Header */}
       <header
@@ -1832,43 +1857,72 @@ export default function Home() {
           </div>
         )}
 
-        {/* Model responses grid (Discussion mode or Synthesis analysis phase) */}
+        {/* Model responses grid (Discussion mode or Synthesis analysis phase).
+            Responsive: 1 col on mobile, 2 on tablet, 3 on desktop. Cards are tap-to-collapse. */}
         {discussion.status !== 'idle' && !synthesisMode && (
-          <div
-            className="grid gap-4 mb-8"
-            style={{ gridTemplateColumns: `repeat(${Object.keys(discussion.modelStates).length}, minmax(280px, 1fr))` }}
-          >
+          <div className="grid gap-4 mb-8 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
             {Object.keys(discussion.modelStates).map(modelId => {
               const model = getModel(modelId);
               const state = discussion.modelStates[modelId];
               if (!model || !state) return null;
 
               const isWinner = discussion.consensusResult?.closest_to_truth === model.name;
+              const isCollapsed = collapsedModels.has(modelId);
+
+              // Preview text used when collapsed — first ~120 chars of latest response.
+              const previewSource = state.currentResponse || state.history[state.history.length - 1] || '';
+              const previewText = previewSource.replace(/\s+/g, ' ').slice(0, 120);
 
               return (
                 <div
                   key={modelId}
-                  className="rounded-2xl border-2 overflow-hidden flex flex-col"
+                  className="rounded-2xl border overflow-hidden flex flex-col transition-shadow"
                   style={{
                     backgroundColor: 'var(--bg-secondary)',
-                    borderColor: model.color,
-                    boxShadow: isWinner ? `0 0 0 3px ${model.color}33` : 'none',
+                    borderColor: model.color + '66',
+                    boxShadow: isWinner
+                      ? `0 0 0 2px ${model.color}55, 0 8px 32px ${model.color}22`
+                      : `0 4px 24px rgba(0,0,0,0.25)`,
                   }}
                 >
-                  <div className="px-5 py-4 border-b flex items-center justify-between" style={{ borderColor: 'var(--border-secondary)' }}>
-                    <div className="flex items-center gap-3">
-                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: model.color }} />
-                      <span className="font-semibold" style={{ color: 'var(--text-primary)' }}>{model.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => toggleCardCollapse(modelId)}
+                    aria-expanded={!isCollapsed}
+                    className="w-full text-left px-5 py-4 flex items-center justify-between hover:bg-white/5 transition-colors"
+                    style={{
+                      borderBottom: isCollapsed ? 'none' : `1px solid var(--border-secondary)`,
+                    }}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div
+                        className="w-3 h-3 rounded-full shrink-0"
+                        style={{
+                          backgroundColor: model.color,
+                          boxShadow: state.streaming ? `0 0 12px ${model.color}` : 'none',
+                        }}
+                      />
+                      <span className="font-semibold truncate" style={{ color: 'var(--text-primary)' }}>{model.name}</span>
                     </div>
-                    {state.retrying && <span className="text-xs" style={{ color: 'var(--warning-text)' }}>🔄 Retry {state.retryAttempt}/3</span>}
-                    {state.streaming && !state.retrying && <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>thinking...</span>}
-                    {state.completed && !state.streaming && <span className="text-xs" style={{ color: 'var(--success-text)' }}><CheckIcon /></span>}
-                    {isWinner && <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--warning-bg)', color: 'var(--warning-text)' }}>🏆</span>}
-                  </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {state.retrying && <span className="text-xs" style={{ color: 'var(--warning-text)' }}>🔄 {state.retryAttempt}/3</span>}
+                      {state.streaming && !state.retrying && <span className="text-xs animate-pulse" style={{ color: 'var(--text-tertiary)' }}>thinking…</span>}
+                      {state.completed && !state.streaming && <span className="text-xs" style={{ color: 'var(--success-text)' }}><CheckIcon /></span>}
+                      {isWinner && <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--warning-bg)', color: 'var(--warning-text)' }}>🏆</span>}
+                      <span style={{ color: 'var(--text-tertiary)' }}><ChevronIcon expanded={!isCollapsed} /></span>
+                    </div>
+                  </button>
 
+                  {isCollapsed && previewText && (
+                    <div className="px-5 pb-3 text-xs italic line-clamp-2" style={{ color: 'var(--text-tertiary)' }}>
+                      {previewText}{previewSource.length > 120 ? '…' : ''}
+                    </div>
+                  )}
+
+                  {!isCollapsed && (
                   <div
                     ref={el => { columnRefs.current[modelId] = el; }}
-                    className="flex-1 p-5 max-h-[500px] overflow-y-auto"
+                    className="flex-1 p-5 max-h-[60vh] overflow-y-auto"
                   >
                     {state.history.map((resp, idx) => {
                       const roundNum = idx + 1;
@@ -1911,6 +1965,7 @@ export default function Home() {
                       </span>
                     )}
                   </div>
+                  )}
                 </div>
               );
             })}
@@ -2174,43 +2229,8 @@ export default function Home() {
       </div>
     </main>
 
-    {/* ===== Floating model labels overlaid on the starmap =====
-        Position is by roughly where each model's "cluster" sits visually in idle/discussion modes.
-        pointer-events:none so they never block clicks on the starmap or controls. */}
-    {AVAILABLE_MODELS.map((m, i) => {
-      const positions = [
-        { left: '14%', top: '22%' },  // left
-        { left: '50%', top: '15%' },  // top center
-        { left: '86%', top: '22%' },  // right
-      ];
-      const isInDiscussion = discussion.status === 'running';
-      return (
-        <div
-          key={m.id}
-          className="fixed pointer-events-none z-[5] flex items-center gap-2 text-[11px] uppercase whitespace-nowrap select-none"
-          style={{
-            ...positions[i],
-            transform: 'translate(-50%, -50%)',
-            letterSpacing: '0.18em',
-            color: m.color,
-            textShadow: '0 0 14px rgba(0,0,0,0.85), 0 0 22px ' + m.color + '44',
-            transition: 'opacity 0.6s, filter 0.6s',
-            opacity: isInDiscussion ? 1 : 0.55,
-            filter: isInDiscussion ? 'brightness(1.4)' : 'none',
-          }}
-        >
-          <span
-            style={{
-              display: 'inline-block',
-              width: 8, height: 8, borderRadius: '50%',
-              background: m.color,
-              boxShadow: '0 0 12px ' + m.color + ', 0 0 4px ' + m.color,
-            }}
-          />
-          {m.name}
-        </div>
-      );
-    })}
+    {/* Model labels are now rendered inside the StarMapBackground canvas so they
+        move/rotate/breathe together with the network (but the text itself stays upright). */}
 
     {/* ===== Fixed bottom prompt bar (x.ai-style) =====
         Centered, max-w-3xl on desktop, full-width with padding on mobile.

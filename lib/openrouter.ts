@@ -35,7 +35,7 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
   {
     id: 'google/gemini-3.5-flash',
     name: 'Gemini 3.5 Flash',
-    color: '#34a853',
+    color: '#4d8eff',
     tier: 'flagship',
     supportsFiles: true,
     supportedFileTypes: ['image', 'pdf', 'video', 'audio'],
