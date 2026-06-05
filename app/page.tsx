@@ -8,7 +8,7 @@ import StarMapBackground, { type StarMapMode } from './components/StarMapBackgro
 
 const AVAILABLE_MODELS = [
   { id: 'openai/gpt-5.5-pro', name: 'GPT-5.5 Pro', color: '#10b981', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
-  { id: 'anthropic/claude-opus-4.7', name: 'Claude Opus 4.7', color: '#f59e0b', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
+  { id: 'anthropic/claude-opus-4.8', name: 'Claude Opus 4.8', color: '#f59e0b', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf'] },
   { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash', color: '#4d8eff', tier: 'flagship', supportsFiles: true, fileTypes: ['image', 'pdf', 'video', 'audio'] },
 ];
 
@@ -17,7 +17,7 @@ const PRESETS = {
     name: 'Expert Panel',
     description: 'Top SOTA models for serious tasks',
     icon: '🎓',
-    models: ['openai/gpt-5.5-pro', 'anthropic/claude-opus-4.7', 'google/gemini-3.5-flash'],
+    models: ['openai/gpt-5.5-pro', 'anthropic/claude-opus-4.8', 'google/gemini-3.5-flash'],
   },
 };
 
