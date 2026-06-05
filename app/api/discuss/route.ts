@@ -540,6 +540,7 @@ async function runPhase<T>(
   phaseTimeoutMs: number,
   fallbackFor: (i: number) => T,
   send: (event: string, data: object) => void,
+  phaseAbort?: AbortController,
 ): Promise<T[]> {
   const total = promises.length;
   const results: T[] = new Array(total);
@@ -590,7 +591,18 @@ async function runPhase<T>(
     }
   }
 
+  // Stop any abandoned in-flight streams so they don't keep burning tokens after the
+  // phase has moved on. Settled promises already finished, so this is a no-op for them.
+  phaseAbort?.abort();
   return results;
+}
+
+// Forward an abort from `parent` (e.g. client disconnect) to `child`, so a per-phase
+// controller fires both when the client leaves and when we explicitly end the phase.
+function linkAbort(parent: AbortSignal | undefined, child: AbortController): void {
+  if (!parent) return;
+  if (parent.aborted) { child.abort(); return; }
+  parent.addEventListener('abort', () => child.abort(), { once: true });
 }
 
 const SYSTEM_PROMPT = `You are {model_name}, an expert AI participating in a roundtable discussion with other AI models.
@@ -1120,6 +1132,8 @@ async function handleSynthesisMode(
 
   const analyses: { modelId: string; modelName: string; content: string }[] = [];
 
+  const analysisAbort = new AbortController();
+  linkAbort(abortSignal, analysisAbort);
   const analysisPromises = models.map(async (modelId) => {
     const modelName = getModelName(modelId);
     const prompt = SYNTHESIS_ANALYSIS_PROMPT
@@ -1140,7 +1154,7 @@ async function handleSynthesisMode(
         },
         MAX_RESPONSE_TOKENS,
         180000, // 3 min per-stream timeout for analysis (phase deadline below is the backstop)
-        abortSignal,
+        analysisAbort.signal,
       );
 
       send('analysis_complete', { model: modelName, wordCount: fullResponse.split(/\s+/).length });
@@ -1161,6 +1175,7 @@ async function handleSynthesisMode(
     analysisDeadline,
     (i) => ({ modelId: models[i], modelName: getModelName(models[i]), content: 'Error: analysis phase timeout' }),
     send,
+    analysisAbort,
   );
 
   // Log analysis results for debugging
@@ -1190,6 +1205,8 @@ async function handleSynthesisMode(
 
   const drafts: { modelId: string; modelName: string; draft: string }[] = [];
 
+  const draftsAbort = new AbortController();
+  linkAbort(abortSignal, draftsAbort);
   const draftPromises = analyses.map(async (analysis) => {
     const draftPrompt = SYNTHESIS_DRAFT_PROMPT
       .replace('{model_name}', analysis.modelName)
@@ -1210,7 +1227,7 @@ async function handleSynthesisMode(
         },
         10000, // Tokens for comprehensive draft
         180000, // 3 min per-stream timeout (phase deadline is the real backstop)
-        abortSignal,
+        draftsAbort.signal,
       );
       send('draft_complete', { model: analysis.modelName, wordCount: draft.split(/\s+/).length });
       return { modelId: analysis.modelId, modelName: analysis.modelName, draft };
@@ -1230,6 +1247,7 @@ async function handleSynthesisMode(
     draftsDeadline,
     (i) => ({ modelId: analyses[i].modelId, modelName: analyses[i].modelName, draft: '' }),
     send,
+    draftsAbort,
   );
 
   // Log draft results for debugging
@@ -1253,6 +1271,9 @@ async function handleSynthesisMode(
   send('review_phase_start', { reviewers: drafts.map(d => d.modelName) });
 
   const allReviews: { reviewerId: string; reviewerName: string; targetId: string; targetName: string; review: string; rating: number }[] = [];
+
+  const reviewsAbort = new AbortController();
+  linkAbort(abortSignal, reviewsAbort);
 
   // Each model reviews all OTHER drafts
   type ReviewResult = { reviewerId: string; reviewerName: string; targetId: string; targetName: string; review: string; rating: number };
@@ -1288,7 +1309,7 @@ async function handleSynthesisMode(
             },
             3000,
             90000, // 90s per-review stream timeout; reviews are short and we have N*(N-1) in parallel
-            abortSignal,
+            reviewsAbort.signal,
           );
 
           // Extract rating from review
@@ -1324,6 +1345,7 @@ async function handleSynthesisMode(
       rating: 5,
     }),
     send,
+    reviewsAbort,
   );
   allReviews.push(...reviewResults);
 
@@ -1350,6 +1372,8 @@ async function handleSynthesisMode(
     .map(d => `### ${d.modelName}'s Draft\n${d.draft}`)
     .join('\n\n========================================\n\n');
 
+  const votingAbort = new AbortController();
+  linkAbort(abortSignal, votingAbort);
   const votePromises = drafts.map(async (voter) => {
     const myAnalysis = analyses.find(a => a.modelId === voter.modelId)?.content || '';
     const myReviews = allReviews
@@ -1374,7 +1398,7 @@ async function handleSynthesisMode(
         0.3,
         3,
         180000,
-        abortSignal,
+        votingAbort.signal,
       );
 
       // Parse JSON response
@@ -1432,6 +1456,7 @@ async function handleSynthesisMode(
       };
     },
     send,
+    votingAbort,
   );
   votes.push(...voteResults);
 
@@ -1509,9 +1534,12 @@ async function handleSynthesisMode(
     // Not enough time to finalize properly — fall back to winner's draft now.
     console.warn(`[Phase:finalize] budget too low (${finalizeDeadline}ms), using winner's draft as final`);
     finalSynthesis = winner.draft;
-    send('finalization_token', { token: winner.draft });
+    send('finalization_replace', { text: finalSynthesis });
     send('phase_progress', { phase: 'finalize', completed: 1, total: 1, skipped: true });
   } else {
+    const finalizeAbort = new AbortController();
+    linkAbort(abortSignal, finalizeAbort);
+
     const finalizePromise = (async () => {
       try {
         await streamModel(
@@ -1526,7 +1554,7 @@ async function handleSynthesisMode(
           },
           12000,
           Math.min(240000, finalizeDeadline), // cap per-stream timeout by remaining budget
-          abortSignal,
+          finalizeAbort.signal,
         );
         return true;
       } catch (error) {
@@ -1543,12 +1571,33 @@ async function handleSynthesisMode(
     if (deadlineTimer) clearTimeout(deadlineTimer);
 
     if (raced === 'DEADLINE' || finalSynthesis.length < 100) {
-      // Stream didn't deliver enough content in time — fall back to winner's draft
+      // Stream didn't deliver usable content in time. Abort it so the winner stops
+      // burning tokens, then fall back to the winner's already-completed draft.
+      finalizeAbort.abort();
       console.warn(`[Phase:finalize] deadline=${raced}, got ${finalSynthesis.length} chars; falling back to winner draft`);
       finalSynthesis = winner.draft;
+      // Replace any partial text the client received with the full draft, so the live
+      // "Final Synthesis" panel actually shows the result (was previously left blank).
+      send('finalization_replace', { text: finalSynthesis });
       send('phase_progress', { phase: 'finalize', completed: 1, total: 1, timeout: true });
     } else {
       send('phase_progress', { phase: 'finalize', completed: 1, total: 1 });
+    }
+  }
+
+  // Defensive: never finish synthesis with empty content. If the final text is somehow
+  // blank, fall back to the best available draft; if even that is empty, surface an error
+  // instead of silently showing a blank "Done".
+  if (!finalSynthesis || finalSynthesis.trim().length === 0) {
+    const fallbackDraft = winner.draft && winner.draft.trim().length > 0
+      ? winner.draft
+      : drafts.find(d => d.draft && d.draft.trim().length > 0)?.draft;
+    if (fallbackDraft) {
+      finalSynthesis = fallbackDraft;
+      send('finalization_replace', { text: finalSynthesis });
+    } else {
+      send('synthesis_error', { error: 'No usable synthesis was produced', phase: 'finalize' });
+      return;
     }
   }
 
@@ -1576,6 +1625,8 @@ async function handleSynthesisMode(
       send('signoff_complete', { model: a.modelName, approved: true, fallback: true, skipped: true });
     }
   } else {
+    const signoffAbort = new AbortController();
+    linkAbort(abortSignal, signoffAbort);
     const signoffPromises = analyses.map(async (analysis) => {
       const signoffPrompt = SYNTHESIS_SIGNOFF_PROMPT
         .replace('{model_name}', analysis.modelName)
@@ -1593,7 +1644,7 @@ async function handleSynthesisMode(
           0.3,
           1,                  // retries = 1 (no retries; we don't have time)
           signoffCallTimeout, // 30s per attempt
-          abortSignal,
+          signoffAbort.signal,
         );
 
         // Parse JSON response
@@ -1636,6 +1687,7 @@ async function handleSynthesisMode(
         signoff: { approved: true, confidence: 0.7, remaining_differences: [] },
       }),
       send,
+      signoffAbort,
     );
     signoffs.push(...signoffResults);
   }

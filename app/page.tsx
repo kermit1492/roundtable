@@ -1391,6 +1391,13 @@ export default function Home() {
         setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
+      case 'finalization_replace':
+        // Server fell back to the winner's draft (finalize stream timed out/failed).
+        // Replace any partial text wholesale so the final panel shows the actual result.
+        setSynthesisDraft((data.text as string) || '');
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
       case 'signoff_start':
         setSynthesisPhase('signoff');
         setDiscussion(p => ({ ...p, phase: 'synthesis_signoff', lastActivityTime: Date.now(), isStuck: false }));
