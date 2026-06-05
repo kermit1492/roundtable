@@ -15,7 +15,7 @@ export const maxDuration = 800; // 800s — Vercel Pro fluid-compute limit. Synt
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const MAX_ITERATIONS = 5;
 const PARTIAL_CONSENSUS_THRESHOLD = 0.66; // 2/3 models agree (0.666...)
-const MAX_VOTE_RETRIES = 5; // Each model MUST vote
+const MAX_VOTE_RETRIES = 2; // Each model MUST vote (votes are just JSON formatting; 2 attempts bounds worst-case latency/cost)
 const MAX_DISCUSSION_TIMEOUT_MS = 600000; // 10 minutes total discussion timeout
 const HEARTBEAT_INTERVAL_MS = 10000; // 10s heartbeat (defends against client stuck-detection during long silent phases)
 
@@ -138,7 +138,7 @@ interface VoteResult {
 
 const MODEL_NAMES: Record<string, string> = {
   'openai/gpt-5.5-pro': 'GPT-5.5 Pro',
-  'anthropic/claude-opus-4.7': 'Claude Opus 4.7',
+  'anthropic/claude-opus-4.8': 'Claude Opus 4.8',
   'google/gemini-3.5-flash': 'Gemini 3.5 Flash',
 };
 
@@ -1089,7 +1089,7 @@ async function handleSynthesisMode(
 ) {
   const MODEL_COLORS: Record<string, string> = {
     'openai/gpt-5.5-pro': '#10b981',
-    'anthropic/claude-opus-4.7': '#f59e0b',
+    'anthropic/claude-opus-4.8': '#f59e0b',
     'google/gemini-3.5-flash': '#4d8eff',
   };
 

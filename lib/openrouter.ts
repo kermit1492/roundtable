@@ -25,8 +25,8 @@ export const AVAILABLE_MODELS: ModelConfig[] = [
     supportedFileTypes: ['image', 'pdf'],
   },
   {
-    id: 'anthropic/claude-opus-4.7',
-    name: 'Claude Opus 4.7',
+    id: 'anthropic/claude-opus-4.8',
+    name: 'Claude Opus 4.8',
     color: '#f59e0b',
     tier: 'flagship',
     supportsFiles: true,

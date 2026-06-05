@@ -761,15 +761,20 @@ export default function Home() {
     });
   };
 
+  // Auto-scroll streaming columns to the bottom. Coalesced into a single
+  // requestAnimationFrame so rapid token updates don't force synchronous layout
+  // (read scrollHeight + write scrollTop) on every streamed token.
   useEffect(() => {
-    if (discussion.status === 'running') {
+    if (discussion.status !== 'running') return;
+    const raf = requestAnimationFrame(() => {
       Object.entries(discussion.modelStates).forEach(([modelId, state]) => {
-        if (state.streaming && columnRefs.current[modelId]) {
+        if (state.streaming) {
           const el = columnRefs.current[modelId];
           if (el) el.scrollTop = el.scrollHeight;
         }
       });
-    }
+    });
+    return () => cancelAnimationFrame(raf);
   }, [discussion.modelStates, discussion.status]);
 
   useEffect(() => {
@@ -778,7 +783,13 @@ export default function Home() {
     }
   }, [discussion.status]);
 
-  // Stuck detection - check if no activity for 2 minutes
+  // Latest activity timestamp kept in a ref so the stuck-detector interval below
+  // doesn't depend on lastActivityTime (which changes on every streamed token and
+  // would otherwise tear down/recreate the interval hundreds of times per run).
+  const lastActivityRef = useRef(discussion.lastActivityTime);
+  lastActivityRef.current = discussion.lastActivityTime;
+
+  // Stuck detection - flag if no activity for 3 minutes.
   useEffect(() => {
     if (discussion.status !== 'running') return;
 
@@ -788,15 +799,18 @@ export default function Home() {
     // heartbeats, well past any reasonable buffering window.
     const STUCK_THRESHOLD_MS = 180000;
     const checkInterval = setInterval(() => {
-      const timeSinceActivity = Date.now() - discussion.lastActivityTime;
-      if (timeSinceActivity > STUCK_THRESHOLD_MS && !discussion.isStuck) {
-        console.warn(`Discussion appears stuck — no heartbeat for ${Math.round(timeSinceActivity / 1000)}s`);
-        setDiscussion(p => ({ ...p, isStuck: true }));
+      const timeSinceActivity = Date.now() - lastActivityRef.current;
+      if (timeSinceActivity > STUCK_THRESHOLD_MS) {
+        setDiscussion(p => {
+          if (p.isStuck) return p;
+          console.warn(`Discussion appears stuck — no heartbeat for ${Math.round(timeSinceActivity / 1000)}s`);
+          return { ...p, isStuck: true };
+        });
       }
     }, 10000); // Check every 10 seconds
 
     return () => clearInterval(checkInterval);
-  }, [discussion.status, discussion.lastActivityTime, discussion.isStuck]);
+  }, [discussion.status]);
 
   const selectPreset = (key: string) => {
     const preset = PRESETS[key as keyof typeof PRESETS];
