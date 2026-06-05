@@ -670,6 +670,10 @@ export default function Home() {
   }[]>([]);
   const [synthesisDraft, setSynthesisDraft] = useState<string>('');
   const [synthesisDrafts, setSynthesisDrafts] = useState<Record<string, string>>({});
+  // Per-model draft status so every expected model shows a card (thinking → streaming →
+  // done/failed) instead of silently disappearing when it produces nothing.
+  const [synthesisDraftModels, setSynthesisDraftModels] = useState<{ id: string; name: string }[]>([]);
+  const [synthesisDraftStatus, setSynthesisDraftStatus] = useState<Record<string, 'pending' | 'thinking' | 'streaming' | 'done' | 'failed'>>({});
   const [synthesisVotes, setSynthesisVotes] = useState<Record<string, string>>({});
   const [discussion, setDiscussion] = useState({
     status: 'idle' as 'idle' | 'running' | 'complete' | 'error',
@@ -1323,10 +1327,36 @@ export default function Home() {
         setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
-      case 'draft_phase_start':
+      case 'draft_phase_start': {
         setSynthesisPhase('drafting');
         setSynthesisDrafts({});
+        // Server now sends [{id,name}]; keep a fallback for the old [name] shape.
+        const dpModels = ((data.models as Array<{ id: string; name: string } | string> | undefined) || [])
+          .map(m => (typeof m === 'string' ? { id: m, name: m } : m));
+        setSynthesisDraftModels(dpModels);
+        setSynthesisDraftStatus(
+          Object.fromEntries(dpModels.map(m => [m.id, 'pending'])) as Record<string, 'pending' | 'thinking' | 'streaming' | 'done' | 'failed'>
+        );
         setDiscussion(p => ({ ...p, phase: 'synthesis_drafting', lastActivityTime: Date.now(), isStuck: false }));
+        break;
+      }
+
+      case 'draft_start':
+        if (data.model) {
+          setSynthesisDraftStatus(prev => ({ ...prev, [data.model as string]: 'thinking' }));
+        }
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
+        break;
+
+      case 'draft_reasoning':
+        // Reasoning models think before writing — keep showing "thinking" until content streams.
+        if (data.model) {
+          setSynthesisDraftStatus(prev => ({
+            ...prev,
+            [data.model as string]: prev[data.model as string] === 'streaming' ? 'streaming' : 'thinking',
+          }));
+        }
+        setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
       case 'draft_token':
@@ -1336,6 +1366,7 @@ export default function Home() {
             ...prev,
             [data.model as string]: (prev[data.model as string] || '') + (data.token as string)
           }));
+          setSynthesisDraftStatus(prev => ({ ...prev, [data.model as string]: 'streaming' }));
         } else {
           // Fallback for finalization tokens
           setSynthesisDraft(prev => prev + (data.token as string));
@@ -1344,6 +1375,10 @@ export default function Home() {
         break;
 
       case 'draft_complete':
+        if (data.model) {
+          const draftFailed = !!data.error;
+          setSynthesisDraftStatus(prev => ({ ...prev, [data.model as string]: draftFailed ? 'failed' : 'done' }));
+        }
         setDiscussion(p => ({ ...p, lastActivityTime: Date.now(), isStuck: false }));
         break;
 
@@ -1813,28 +1848,47 @@ export default function Home() {
         )}
 
         {/* Synthesis Mode - All Drafts Preview during drafting phase */}
-        {discussion.status === 'running' && synthesisMode && (synthesisPhase === 'drafting' || synthesisPhase === 'synthesis_drafting') && Object.keys(synthesisDrafts).length > 0 && (
+        {discussion.status === 'running' && synthesisMode && (synthesisPhase === 'drafting' || synthesisPhase === 'synthesis_drafting') && synthesisDraftModels.length > 0 && (
           <div
             className="mb-6 grid gap-4"
-            style={{ gridTemplateColumns: `repeat(${Math.min(Object.keys(synthesisDrafts).length, 3)}, 1fr)` }}
+            style={{ gridTemplateColumns: `repeat(${Math.min(synthesisDraftModels.length, 3)}, 1fr)` }}
           >
-            {Object.entries(synthesisDrafts).map(([modelId, draft]) => {
+            {synthesisDraftModels.map(({ id: modelId, name }) => {
               const model = getModel(modelId);
+              const draft = synthesisDrafts[modelId] || '';
+              const status = synthesisDraftStatus[modelId] || 'pending';
+              const wordCount = draft.split(/\s+/).filter(Boolean).length;
+              const statusLabel =
+                status === 'thinking' ? '🧠 thinking…' :
+                status === 'streaming' ? `${wordCount} words` :
+                status === 'done' ? `✓ ${wordCount} words` :
+                status === 'failed' ? '⚠️ no draft' :
+                'waiting…';
               return (
                 <div
                   key={modelId}
                   className="rounded-xl border-2 overflow-hidden"
-                  style={{ backgroundColor: 'var(--bg-secondary)', borderColor: model?.color || 'var(--border-primary)' }}
+                  style={{ backgroundColor: 'var(--bg-secondary)', borderColor: model?.color || 'var(--border-primary)', opacity: status === 'failed' ? 0.6 : 1 }}
                 >
                   <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-secondary)' }}>
                     <div className="w-2 h-2 rounded-full" style={{ backgroundColor: model?.color || '#888' }} />
-                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{model?.name || modelId}</span>
-                    <span className="text-xs ml-auto" style={{ color: 'var(--text-tertiary)' }}>{draft.split(/\s+/).length} words</span>
+                    <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{model?.name || name || modelId}</span>
+                    <span className="text-xs ml-auto" style={{ color: 'var(--text-tertiary)' }}>{statusLabel}</span>
                   </div>
                   <div className="p-4 max-h-64 overflow-y-auto text-sm whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
-                    {draft.slice(0, 500)}
-                    {draft.length > 500 && '...'}
-                    <span className="animate-pulse">|</span>
+                    {draft ? (
+                      <>
+                        {draft.slice(0, 500)}
+                        {draft.length > 500 && '...'}
+                        {(status === 'thinking' || status === 'streaming') && <span className="animate-pulse">|</span>}
+                      </>
+                    ) : status === 'thinking' ? (
+                      <span className="italic" style={{ color: 'var(--text-tertiary)' }}>Reasoning… (this model thinks before writing)</span>
+                    ) : status === 'failed' ? (
+                      <span className="italic" style={{ color: 'var(--text-tertiary)' }}>No draft produced (timed out or errored).</span>
+                    ) : (
+                      <span className="italic" style={{ color: 'var(--text-tertiary)' }}>Waiting…</span>
+                    )}
                   </div>
                 </div>
               );

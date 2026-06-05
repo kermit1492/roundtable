@@ -350,6 +350,7 @@ async function streamModel(
   maxTokens: number = MAX_RESPONSE_TOKENS,
   timeoutMs: number = 240000, // Default 240 seconds (reasoning models like GPT-5.5 Pro need more); can be increased for synthesis
   externalSignal?: AbortSignal, // upstream abort (client disconnected, user pressed Stop)
+  onReasoning?: (token: string) => void, // reasoning models stream "thinking" tokens before content
 ): Promise<string> {
   const actualModelId = getActualModelId(modelId);
   const MAX_RETRIES = 2;
@@ -377,6 +378,8 @@ async function streamModel(
       if (externalSignal.aborted) controller.abort();
       else externalSignal.addEventListener('abort', onExternalAbort, { once: true });
     }
+
+    let fullResponse = ''; // hoisted out of try so a timeout can still salvage partial content
 
     try {
     const apiUrl = 'https://openrouter.ai/api/v1/chat/completions';
@@ -408,7 +411,6 @@ async function streamModel(
     if (!reader) throw new Error('No reader');
 
     const decoder = new TextDecoder();
-    let fullResponse = '';
     let buffer = '';
     let streamFinished = false;
 
@@ -463,6 +465,12 @@ async function streamModel(
               fullResponse += content;
               onToken(content);
             }
+
+            // Reasoning models (e.g. GPT-5.5 Pro) stream their thinking in `reasoning` /
+            // `reasoning_content` before the final answer. Surface it separately so callers
+            // can show a "thinking" state and salvage it if the final content never arrives.
+            const reasoningTok = delta?.reasoning || delta?.reasoning_content || '';
+            if (reasoningTok && onReasoning) onReasoning(reasoningTok);
           } catch (e) {
             // Re-throw rate limit and stream errors, ignore JSON parse errors
             if (e instanceof Error && (e.message.startsWith('RATE_LIMIT:') || e.message.startsWith('Stream error:'))) {
@@ -483,6 +491,13 @@ async function streamModel(
     if (externalSignal?.aborted) {
       console.log(`[${actualModelId}] Stream aborted by client/user`);
       throw new Error('aborted');
+    }
+
+    // Our own per-stream timeout fired. If the model already streamed some content,
+    // return it instead of discarding everything — slow reasoning models deliver late.
+    if (timedOut && fullResponse.trim().length > 0) {
+      console.warn(`[${actualModelId}] Timed out; returning ${fullResponse.length} chars of partial content`);
+      return fullResponse;
     }
 
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -1197,7 +1212,7 @@ async function handleSynthesisMode(
 
   // ==================== PHASE 2: ALL Models Write Drafts ====================
   // Every model writes their own draft synthesis
-  send('draft_phase_start', { models: analyses.map(a => a.modelName) });
+  send('draft_phase_start', { models: analyses.map(a => ({ id: a.modelId, name: a.modelName })) });
 
   const analysesText = analyses
     .map(a => `### ${a.modelName}\n${a.content}`)
@@ -1207,13 +1222,20 @@ async function handleSynthesisMode(
 
   const draftsAbort = new AbortController();
   linkAbort(abortSignal, draftsAbort);
+  // Best-so-far text per model, so a model cut off by the phase deadline still
+  // contributes whatever it produced (content, or reasoning if content hasn't arrived).
+  const draftPartials = new Map<string, string>();
   const draftPromises = analyses.map(async (analysis) => {
     const draftPrompt = SYNTHESIS_DRAFT_PROMPT
       .replace('{model_name}', analysis.modelName)
       .replace('{question}', question)
       .replace('{analyses}', analysesText);
 
+    send('draft_start', { model: analysis.modelId, modelName: analysis.modelName });
+
     let draft = '';
+    let reasoning = '';
+    const remember = () => draftPartials.set(analysis.modelId, draft.trim() ? draft : reasoning);
     try {
       await streamModel(
         analysis.modelId,
@@ -1223,18 +1245,29 @@ async function handleSynthesisMode(
         ],
         (token) => {
           draft += token;
+          remember();
           send('draft_token', { model: analysis.modelId, token });
         },
         10000, // Tokens for comprehensive draft
         180000, // 3 min per-stream timeout (phase deadline is the real backstop)
         draftsAbort.signal,
+        (rTok) => {
+          reasoning += rTok;
+          remember();
+          send('draft_reasoning', { model: analysis.modelId });
+        },
       );
-      send('draft_complete', { model: analysis.modelName, wordCount: draft.split(/\s+/).length });
-      return { modelId: analysis.modelId, modelName: analysis.modelName, draft };
+      // If the model produced only reasoning before finishing (reasoning models can be cut
+      // off before the final answer), fall back to the reasoning so it still contributes.
+      const finalDraft = draft.trim().length > 0 ? draft : reasoning;
+      send('draft_complete', { model: analysis.modelId, modelName: analysis.modelName, wordCount: finalDraft.split(/\s+/).length });
+      return { modelId: analysis.modelId, modelName: analysis.modelName, draft: finalDraft };
     } catch (error) {
       console.error(`[${analysis.modelName}] Draft failed:`, error);
-      send('draft_complete', { model: analysis.modelName, error: String(error) });
-      return { modelId: analysis.modelId, modelName: analysis.modelName, draft: '' };
+      // Salvage any partial content/reasoning captured before the failure.
+      const partial = draft.trim().length > 0 ? draft : reasoning;
+      send('draft_complete', { model: analysis.modelId, modelName: analysis.modelName, error: String(error).slice(0, 200) });
+      return { modelId: analysis.modelId, modelName: analysis.modelName, draft: partial };
     }
   });
 
@@ -1245,7 +1278,7 @@ async function handleSynthesisMode(
     'drafts',
     draftPromises,
     draftsDeadline,
-    (i) => ({ modelId: analyses[i].modelId, modelName: analyses[i].modelName, draft: '' }),
+    (i) => ({ modelId: analyses[i].modelId, modelName: analyses[i].modelName, draft: draftPartials.get(analyses[i].modelId) || '' }),
     send,
     draftsAbort,
   );
