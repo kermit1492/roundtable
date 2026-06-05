@@ -1,4 +1,12 @@
 import { NextRequest } from 'next/server';
+import {
+  checkAuth,
+  checkRateLimit,
+  getClientIp,
+  acquireSlot,
+  releaseSlot,
+  validateDiscussionRequest,
+} from '@/lib/security';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -1773,12 +1781,39 @@ function parseSynthesisReport(
 }
 
 export async function POST(request: NextRequest) {
-  const body: DiscussionRequest = await request.json();
-  const { question, models: requestedModels, thread, file, nsfwMode, synthesisMode } = body;
+  const json = (data: unknown, status: number, extraHeaders?: Record<string, string>) =>
+    new Response(JSON.stringify(data), {
+      status,
+      headers: { 'Content-Type': 'application/json', ...(extraHeaders || {}) },
+    });
 
-  if (!question || !requestedModels || requestedModels.length < 2) {
-    return new Response(JSON.stringify({ error: 'Need question and at least 2 models' }), { status: 400 });
+  // --- C1: optional shared-secret auth ---
+  if (!checkAuth(request)) {
+    return json({ error: 'Unauthorized' }, 401);
   }
+
+  // --- C1: per-IP + global rate limiting / concurrency cap ---
+  const clientIp = getClientIp(request);
+  const rate = checkRateLimit(clientIp);
+  if (!rate.ok) {
+    return json({ error: rate.message }, rate.status, rate.retryAfter ? { 'Retry-After': String(rate.retryAfter) } : undefined);
+  }
+
+  // --- C2: parse + validate the body (never trust the client) ---
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return json({ error: 'Invalid JSON body.' }, 400);
+  }
+  const validation = validateDiscussionRequest(rawBody);
+  if (!validation.ok) {
+    return json({ error: validation.message }, 400);
+  }
+  const { question, models: requestedModels, thread, file, nsfwMode, synthesisMode } = validation.value;
+
+  // Reserve a concurrency slot for the lifetime of this stream (released in finally).
+  acquireSlot(clientIp);
 
   const { stream, send, close } = createSSEStream();
 
@@ -2246,6 +2281,8 @@ export async function POST(request: NextRequest) {
         send('error', { message: msg });
       }
     } finally {
+      // Release the rate-limit concurrency slot reserved before the stream started.
+      releaseSlot(clientIp);
       // Clean up heartbeat interval
       clearInterval(heartbeatInterval);
       // Remove the client-disconnect listener so we don't leak it when the function ends.

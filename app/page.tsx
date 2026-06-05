@@ -272,28 +272,60 @@ function SynthesisProgress({ phase, winnerModel }: { phase: string; winnerModel:
 }
 
 // Render text with LaTeX math formulas using KaTeX
+// Escape HTML special characters so untrusted text can't inject markup.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Renders LLM-authored text to HTML safely (prevents XSS — see audit C3).
+//
+// The string is built so the ONLY real HTML it ever contains is:
+//   - KaTeX output (KaTeX uses trust:false, so no <script>/href injection), and
+//   - our own <strong> tags from markdown bold.
+// Everything else (the untrusted prose) is HTML-escaped, so a model emitting
+// e.g. `<img src=x onerror=...>` is rendered as inert text instead of executing.
+//
+// Strategy: extract & render math first, stash the trusted KaTeX HTML behind
+// placeholders, escape the remaining prose, apply bold, then restore the
+// placeholders. (Placeholders only ever resolve to OUR generated KaTeX HTML, so
+// even a crafted-collision in model text can never inject attacker markup.)
 function renderWithLatex(text: string): string {
-  // Replace display math \[...\] and $$...$$
-  let html = text.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => {
-    try { return katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }); }
-    catch { return math; }
-  });
-  html = html.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => {
-    try { return katex.renderToString(math.trim(), { displayMode: true, throwOnError: false }); }
-    catch { return math; }
-  });
-  // Replace inline math \(...\) and $...$
-  html = html.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => {
-    try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); }
-    catch { return math; }
-  });
-  html = html.replace(/\$([^$\n]+?)\$/g, (_, math) => {
-    try { return katex.renderToString(math.trim(), { displayMode: false, throwOnError: false }); }
-    catch { return math; }
-  });
-  // Convert markdown bold
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-  return html;
+  const stash: string[] = [];
+  const keep = (html: string): string => {
+    const token = ` KMATH${stash.length} `;
+    stash.push(html);
+    return token;
+  };
+  const renderMath = (math: string, displayMode: boolean): string => {
+    try {
+      return keep(katex.renderToString(math.trim(), { displayMode, throwOnError: false }));
+    } catch {
+      return keep(escapeHtml(math)); // escape on failure — never emit raw math text
+    }
+  };
+
+  let s = text;
+  // Render math on the RAW source (before escaping) so KaTeX sees real `<`, `&`, etc.
+  s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, m) => renderMath(m, true));
+  s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => renderMath(m, true));
+  s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => renderMath(m, false));
+  s = s.replace(/\$([^$\n]+?)\$/g, (_, m) => renderMath(m, false));
+
+  // Escape all remaining (untrusted) prose. Placeholders survive untouched.
+  s = escapeHtml(s);
+
+  // Safe markdown: ** -> <strong> (operates on already-escaped text).
+  s = s.replace(/\*\*([\s\S]*?)\*\*/g, '<strong>$1</strong>');
+
+  // Restore the trusted KaTeX HTML.
+  s = s.replace(/ KMATH(\d+) /g, (_, i) => stash[Number(i)] ?? '');
+
+  return s;
 }
 
 function LatexText({ text, className, style }: { text: string; className?: string; style?: React.CSSProperties }) {
@@ -1433,7 +1465,13 @@ export default function Home() {
     try {
       const res = await fetch('/api/discuss', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Optional shared-secret gate (see lib/security.ts). Sent only when configured.
+          ...(process.env.NEXT_PUBLIC_APP_SECRET
+            ? { 'x-app-secret': process.env.NEXT_PUBLIC_APP_SECRET }
+            : {}),
+        },
         body: JSON.stringify({
           question: currentQuestion,
           models: selectedModels,
